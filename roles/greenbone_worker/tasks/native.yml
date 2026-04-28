@@ -1,0 +1,35 @@
+---
+- name: Assert native worker mode is supported on current OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: >-
+      Native worker mode currently supports Debian-family package installations.
+      Use greenbone_install_mode=docker for {{ ansible_distribution }}.
+
+- name: Install native worker scanner packages
+  ansible.builtin.apt:
+    name: "{{ greenbone_worker_native_packages }}"
+    state: present
+    update_cache: true
+
+- name: Render native worker ospd-openvas configuration
+  ansible.builtin.template:
+    src: ospd-openvas.conf.j2
+    dest: "{{ greenbone_worker_ospd_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and start native worker OSPD service
+  ansible.builtin.service:
+    name: "{{ greenbone_worker_ospd_service }}"
+    state: started
+    enabled: true
+  failed_when: false
+
+- name: Display native worker scanner information
+  ansible.builtin.debug:
+    msg:
+      - "Native worker scanner {{ greenbone_worker_scanner_name }} is configured on {{ greenbone_worker_bind_address }}:{{ greenbone_worker_ospd_port }}."
+      - "Register it on the master only after OSP certificates are configured."

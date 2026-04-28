@@ -1,0 +1,17 @@
+---
+greenbone_docker_compose_url: "https://greenbone.github.io/docs/latest/_static/compose.yaml"
+greenbone_docker_compose_refresh: true
+greenbone_docker_pull: true
+greenbone_docker_patch_web_ports: true
+greenbone_docker_password_retries: 60
+greenbone_docker_password_delay: 15
+
+greenbone_native_package_name: gvm
+greenbone_native_setup_force: false
+greenbone_native_setup_marker_path: /var/lib/gvm/private/CA/clientkey.pem
+greenbone_native_start_command: gvm-start
+greenbone_native_check_command: gvm-check-setup
+greenbone_gvmd_user: _gvm
+greenbone_gsad_service_paths:
+  - /usr/lib/systemd/system/gsad.service
+  - /lib/systemd/system/gsad.service

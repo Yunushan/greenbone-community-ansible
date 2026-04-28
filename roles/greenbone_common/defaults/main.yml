@@ -1,0 +1,28 @@
+---
+greenbone_supported_distributions_normalized:
+  - ubuntu
+  - debian
+  - kali
+  - kalignulinux
+  - redhat
+  - redhatenterpriselinux
+  - almalinux
+  - rocky
+  - oraclelinux
+  - oraclelinuxserver
+  - alpine
+
+greenbone_install_mode: auto
+greenbone_auto_native_distributions_normalized:
+  - kali
+  - kalignulinux
+
+greenbone_work_dir: /opt/greenbone-community
+greenbone_admin_user: admin
+greenbone_controller_secret_dir: "{{ lookup('env', 'PWD') + '/.secrets' }}"
+greenbone_admin_password: ""
+greenbone_web_bind_address: "127.0.0.1"
+greenbone_web_https_port: 443
+greenbone_web_gsad_port: 9392
+
+greenbone_worker_ospd_port: 9390

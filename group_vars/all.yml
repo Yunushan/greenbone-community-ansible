@@ -1,0 +1,33 @@
+---
+# auto = native on Kali, Docker on other supported distributions.
+# docker = force Greenbone Community Containers.
+# native = force distro packages; native package support varies by distribution.
+greenbone_install_mode: auto
+
+# Greenbone working directory on target hosts.
+greenbone_work_dir: /opt/greenbone-community
+
+# GSA web bind. Keep localhost unless you have VPN, firewall, or reverse proxy controls.
+greenbone_web_bind_address: "127.0.0.1"
+greenbone_web_https_port: 443
+greenbone_web_gsad_port: 9392
+
+# Admin account. Password is generated on the Ansible controller and ignored by git.
+greenbone_admin_user: admin
+greenbone_controller_secret_dir: "{{ lookup('env', 'PWD') + '/.secrets' }}"
+greenbone_admin_password: "{{ lookup('ansible.builtin.password', greenbone_controller_secret_dir + '/greenbone_admin_password length=24 chars=ascii_letters,digits') }}"
+
+# Docker compose source from official Greenbone Community Documentation.
+greenbone_docker_compose_url: "https://greenbone.github.io/docs/latest/_static/compose.yaml"
+greenbone_docker_compose_refresh: true
+greenbone_docker_pull: true
+greenbone_docker_patch_web_ports: true
+
+# Native package settings.
+greenbone_native_package_name: gvm
+greenbone_gvmd_user: _gvm
+
+# Remote scanner registration paths. Update before using playbooks/register-workers.yml.
+greenbone_scanner_ca_pub: /var/lib/gvm/CA/cacert.pem
+greenbone_scanner_key_pub: /var/lib/gvm/CA/clientcert.pem
+greenbone_scanner_key_priv: /var/lib/gvm/private/CA/clientkey.pem

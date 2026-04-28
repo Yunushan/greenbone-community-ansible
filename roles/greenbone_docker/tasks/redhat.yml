@@ -1,0 +1,44 @@
+---
+- name: Set Docker RPM repository URL
+  ansible.builtin.set_fact:
+    greenbone_docker_rpm_repo_url: >-
+      {{ 'https://download.docker.com/linux/rhel/docker-ce.repo'
+         if greenbone_distribution_normalized in ['redhat', 'redhatenterpriselinux']
+         else 'https://download.docker.com/linux/centos/docker-ce.repo' }}
+
+- name: Remove conflicting Docker RPM packages
+  ansible.builtin.dnf:
+    name: "{{ greenbone_docker_rpm_conflicting_packages }}"
+    state: absent
+  failed_when: false
+  when: greenbone_docker_use_official_repo | bool
+
+- name: Install DNF plugin dependencies
+  ansible.builtin.dnf:
+    name:
+      - dnf-plugins-core
+    state: present
+  failed_when: false
+
+- name: Add Docker RPM repository
+  ansible.builtin.get_url:
+    url: "{{ greenbone_docker_rpm_repo_url }}"
+    dest: /etc/yum.repos.d/docker-ce.repo
+    owner: root
+    group: root
+    mode: "0644"
+  when: greenbone_docker_use_official_repo | bool
+
+- name: Install Docker RPM packages
+  ansible.builtin.dnf:
+    name: "{{ greenbone_docker_rpm_packages }}"
+    state: present
+  when: greenbone_docker_use_official_repo | bool
+
+- name: Install Docker from distribution packages when official repo is disabled
+  ansible.builtin.dnf:
+    name:
+      - docker
+      - docker-compose-plugin
+    state: present
+  when: not greenbone_docker_use_official_repo | bool

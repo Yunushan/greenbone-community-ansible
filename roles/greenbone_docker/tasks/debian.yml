@@ -1,0 +1,60 @@
+---
+- name: Set Docker apt facts
+  ansible.builtin.set_fact:
+    greenbone_docker_apt_repo_distribution: "{{ 'ubuntu' if greenbone_distribution_normalized == 'ubuntu' else 'debian' }}"
+    greenbone_docker_apt_arch: "{{ greenbone_docker_arch_map.get(ansible_architecture, ansible_architecture) }}"
+
+- name: Remove conflicting Docker packages before official repository installation
+  ansible.builtin.apt:
+    name: "{{ greenbone_docker_apt_conflicting_packages }}"
+    state: absent
+  failed_when: false
+  when:
+    - greenbone_docker_use_official_repo | bool
+    - greenbone_distribution_normalized in ['ubuntu', 'debian']
+
+- name: Ensure Docker apt keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - greenbone_docker_use_official_repo | bool
+    - greenbone_distribution_normalized in ['ubuntu', 'debian']
+
+- name: Install Docker official apt signing key
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ greenbone_docker_apt_repo_distribution }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+  when:
+    - greenbone_docker_use_official_repo | bool
+    - greenbone_distribution_normalized in ['ubuntu', 'debian']
+
+- name: Add Docker official apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [arch={{ greenbone_docker_apt_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ greenbone_docker_apt_repo_distribution }} {{ ansible_distribution_release }} stable"
+    filename: docker
+    state: present
+    update_cache: true
+  when:
+    - greenbone_docker_use_official_repo | bool
+    - greenbone_distribution_normalized in ['ubuntu', 'debian']
+
+- name: Install Docker official apt packages
+  ansible.builtin.apt:
+    name: "{{ greenbone_docker_apt_official_packages }}"
+    state: present
+    update_cache: true
+  when:
+    - greenbone_docker_use_official_repo | bool
+    - greenbone_distribution_normalized in ['ubuntu', 'debian']
+
+- name: Install Docker from distribution packages for Debian derivatives without official repo mapping
+  ansible.builtin.apt:
+    name: "{{ greenbone_docker_apt_distro_packages }}"
+    state: present
+    update_cache: true
+  when: not (greenbone_docker_use_official_repo | bool and greenbone_distribution_normalized in ['ubuntu', 'debian'])

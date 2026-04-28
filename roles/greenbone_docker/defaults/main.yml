@@ -1,0 +1,54 @@
+---
+greenbone_install_docker_engine: true
+greenbone_docker_use_official_repo: true
+
+greenbone_docker_apt_conflicting_packages:
+  - docker.io
+  - docker-doc
+  - docker-compose
+  - podman-docker
+  - containerd
+  - runc
+
+greenbone_docker_apt_official_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+greenbone_docker_apt_distro_packages:
+  - docker.io
+  - docker-compose-plugin
+
+greenbone_docker_rpm_conflicting_packages:
+  - docker
+  - docker-client
+  - docker-client-latest
+  - docker-common
+  - docker-latest
+  - docker-latest-logrotate
+  - docker-logrotate
+  - docker-engine
+  - podman-docker
+  - containerd
+  - runc
+
+greenbone_docker_rpm_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+greenbone_docker_alpine_packages:
+  - docker
+  - docker-cli-compose
+
+greenbone_docker_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  armv7l: armhf
+  armv6l: armhf
+  ppc64le: ppc64el
+  s390x: s390x

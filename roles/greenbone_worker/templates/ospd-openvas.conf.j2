@@ -1,0 +1,9 @@
+[OSPD - openvas]
+bind_address = {{ greenbone_worker_bind_address }}
+port = {{ greenbone_worker_ospd_port }}
+log_level = INFO
+{% if greenbone_worker_tls_enabled | bool %}
+ca_cert = {{ greenbone_worker_tls_dir }}/cacert.pem
+cert_file = {{ greenbone_worker_tls_dir }}/servercert.pem
+key_file = {{ greenbone_worker_tls_dir }}/serverkey.pem
+{% endif %}

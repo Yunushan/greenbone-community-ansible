@@ -1,0 +1,9 @@
+---
+# Worker nodes are optional. Add hosts to the greenbone_workers inventory group to use this role.
+greenbone_worker_ospd_port: 9390
+greenbone_worker_bind_address: "0.0.0.0"
+greenbone_worker_scanner_name: "{{ inventory_hostname }}"
+
+# Worker OSP TLS is deployment-specific. Keep registration disabled until certs are configured.
+greenbone_worker_tls_enabled: false
+greenbone_worker_tls_dir: "{{ greenbone_work_dir }}/tls"

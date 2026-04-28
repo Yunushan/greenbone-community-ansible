@@ -1,0 +1,49 @@
+---
+- name: Update Greenbone Community Container feeds
+  hosts: greenbone_masters
+  become: true
+  gather_facts: true
+  roles:
+    - role: greenbone_common
+  tasks:
+    - name: Pull Greenbone feed data containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_work_dir }}/compose.yaml"
+          - pull
+          - notus-data
+          - vulnerability-tests
+          - scap-data
+          - dfn-cert-data
+          - cert-bund-data
+          - report-formats
+          - data-objects
+      changed_when: true
+      when: greenbone_effective_install_mode == 'docker'
+
+    - name: Start Greenbone feed data containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_work_dir }}/compose.yaml"
+          - up
+          - -d
+          - notus-data
+          - vulnerability-tests
+          - scap-data
+          - dfn-cert-data
+          - cert-bund-data
+          - report-formats
+          - data-objects
+      changed_when: true
+      when: greenbone_effective_install_mode == 'docker'
+
+    - name: Run native Greenbone feed sync
+      ansible.builtin.command: greenbone-feed-sync
+      changed_when: true
+      when: greenbone_effective_install_mode == 'native'

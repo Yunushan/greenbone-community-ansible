@@ -1,0 +1,42 @@
+---
+- name: Stop or remove Greenbone Community Edition
+  hosts: greenbone_masters:greenbone_workers
+  become: true
+  gather_facts: true
+  vars:
+    greenbone_uninstall_keep_data: true
+  roles:
+    - role: greenbone_common
+  tasks:
+    - name: Stop Docker Compose stack but keep data volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_work_dir }}/compose.yaml"
+          - down
+      changed_when: true
+      when:
+        - greenbone_effective_install_mode == 'docker'
+        - greenbone_uninstall_keep_data | bool
+
+    - name: Remove Docker Compose stack and data volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_work_dir }}/compose.yaml"
+          - down
+          - --volumes
+      changed_when: true
+      when:
+        - greenbone_effective_install_mode == 'docker'
+        - not greenbone_uninstall_keep_data | bool
+
+    - name: Stop native Greenbone services
+      ansible.builtin.command: gvm-stop
+      changed_when: true
+      failed_when: false
+      when: greenbone_effective_install_mode == 'native'

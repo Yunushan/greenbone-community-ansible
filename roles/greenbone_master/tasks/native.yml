@@ -1,0 +1,79 @@
+---
+- name: Assert native mode is supported by this role on current OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: >-
+      Native mode currently supports Debian-family package installations, especially Kali Linux.
+      Use greenbone_install_mode=docker for {{ ansible_distribution }}.
+
+- name: Install native Greenbone package
+  ansible.builtin.apt:
+    name: "{{ greenbone_native_package_name }}"
+    state: present
+    update_cache: true
+
+- name: Check whether Greenbone native setup marker exists
+  ansible.builtin.stat:
+    path: "{{ greenbone_native_setup_marker_path }}"
+  register: greenbone_native_setup_marker
+
+- name: Run Greenbone native setup
+  ansible.builtin.command: gvm-setup
+  register: greenbone_native_setup_result
+  changed_when: true
+  no_log: true
+  when:
+    - greenbone_native_setup_force | bool or not greenbone_native_setup_marker.stat.exists
+
+- name: Start native Greenbone services
+  ansible.builtin.command: "{{ greenbone_native_start_command }}"
+  changed_when: true
+  failed_when: false
+
+- name: Set native Greenbone admin password
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - "{{ greenbone_gvmd_user }}"
+      - --
+      - gvmd
+      - "--user={{ greenbone_admin_user }}"
+      - "--new-password={{ greenbone_admin_password }}"
+  changed_when: true
+  no_log: true
+  when: greenbone_admin_password | length > 0
+
+- name: Locate gsad systemd service files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ greenbone_gsad_service_paths }}"
+  register: greenbone_gsad_service_file_stats
+  when:
+    - ansible_service_mgr == 'systemd'
+    - greenbone_web_bind_address not in ['127.0.0.1', 'localhost', '::1']
+
+- name: Patch native gsad listen address
+  ansible.builtin.replace:
+    path: "{{ item.stat.path }}"
+    regexp: '--listen=127\.0\.0\.1'
+    replace: "--listen={{ greenbone_web_bind_address }}"
+  loop: "{{ greenbone_gsad_service_file_stats.results | default([]) }}"
+  when:
+    - item.stat.exists | default(false)
+    - ansible_service_mgr == 'systemd'
+    - greenbone_web_bind_address not in ['127.0.0.1', 'localhost', '::1']
+  notify:
+    - Reload systemd
+    - Restart gsad
+
+- name: Run native Greenbone setup check
+  ansible.builtin.command: "{{ greenbone_native_check_command }}"
+  register: greenbone_native_check_result
+  changed_when: false
+  failed_when: false
+
+- name: Show native setup check result
+  ansible.builtin.debug:
+    var: greenbone_native_check_result.stdout_lines

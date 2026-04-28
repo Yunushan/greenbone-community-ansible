@@ -1,0 +1,55 @@
+---
+- name: Ensure worker directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ greenbone_work_dir }}"
+    - "{{ greenbone_worker_tls_dir }}"
+
+- name: Render worker ospd-openvas configuration
+  ansible.builtin.template:
+    src: ospd-openvas.conf.j2
+    dest: "{{ greenbone_work_dir }}/ospd-openvas.conf"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Render worker Docker Compose file
+  ansible.builtin.template:
+    src: worker-compose.yaml.j2
+    dest: "{{ greenbone_work_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Pull Greenbone worker scanner images
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ greenbone_work_dir }}/compose.yaml"
+      - pull
+  changed_when: true
+  when: greenbone_worker_compose_pull | bool
+
+- name: Start Greenbone worker scanner containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ greenbone_work_dir }}/compose.yaml"
+      - up
+      - -d
+  changed_when: true
+
+- name: Display worker scanner information
+  ansible.builtin.debug:
+    msg:
+      - "Worker scanner {{ greenbone_worker_scanner_name }} is configured on {{ greenbone_worker_bind_address }}:{{ greenbone_worker_ospd_port }}."
+      - "Register it on the master only after OSP certificates are configured."

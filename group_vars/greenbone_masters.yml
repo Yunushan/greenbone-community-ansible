@@ -1,0 +1,4 @@
+---
+# Master-specific overrides can go here.
+# Example:
+# greenbone_web_bind_address: "0.0.0.0"

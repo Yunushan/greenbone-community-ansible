@@ -1,0 +1,25 @@
+# Ansible
+*.retry
+.ansible/
+
+# Generated local secrets
+.secrets/
+*.vault
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.idea/
+.vscode/
+.DS_Store
+
+# Archives
+*.tar.gz
+*.zip
+
+# Local duplicate copy
+/greenbone-community-ansible/

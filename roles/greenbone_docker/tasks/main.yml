@@ -1,0 +1,24 @@
+---
+- name: Include Debian Docker setup
+  ansible.builtin.include_tasks: debian.yml
+  when:
+    - greenbone_install_docker_engine | bool
+    - ansible_os_family == 'Debian'
+
+- name: Include RedHat Docker setup
+  ansible.builtin.include_tasks: redhat.yml
+  when:
+    - greenbone_install_docker_engine | bool
+    - ansible_os_family == 'RedHat'
+
+- name: Include Alpine Docker setup
+  ansible.builtin.include_tasks: alpine.yml
+  when:
+    - greenbone_install_docker_engine | bool
+    - greenbone_distribution_normalized == 'alpine'
+
+- name: Ensure Docker service is enabled and started
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true

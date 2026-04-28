@@ -1,0 +1,84 @@
+---
+- name: Ensure Greenbone Docker work directory exists
+  ansible.builtin.file:
+    path: "{{ greenbone_work_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Download official Greenbone Community Containers compose file
+  ansible.builtin.get_url:
+    url: "{{ greenbone_docker_compose_url }}"
+    dest: "{{ greenbone_work_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+    force: "{{ greenbone_docker_compose_refresh | bool }}"
+
+- name: Patch HTTPS bind address and port in compose file
+  ansible.builtin.replace:
+    path: "{{ greenbone_work_dir }}/compose.yaml"
+    regexp: '127\.0\.0\.1:443:443'
+    replace: "{{ greenbone_web_bind_address }}:{{ greenbone_web_https_port }}:443"
+  when: greenbone_docker_patch_web_ports | bool
+
+- name: Patch GSAD bind address and port in compose file
+  ansible.builtin.replace:
+    path: "{{ greenbone_work_dir }}/compose.yaml"
+    regexp: '127\.0\.0\.1:9392:9392'
+    replace: "{{ greenbone_web_bind_address }}:{{ greenbone_web_gsad_port }}:9392"
+  when: greenbone_docker_patch_web_ports | bool
+
+- name: Pull Greenbone Community Container images
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ greenbone_work_dir }}/compose.yaml"
+      - pull
+  changed_when: true
+  when: greenbone_docker_pull | bool
+
+- name: Start Greenbone Community Containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ greenbone_work_dir }}/compose.yaml"
+      - up
+      - -d
+  changed_when: true
+
+- name: Set Greenbone Docker admin password
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ greenbone_work_dir }}/compose.yaml"
+      - exec
+      - -T
+      - -u
+      - gvmd
+      - gvmd
+      - gvmd
+      - "--user={{ greenbone_admin_user }}"
+      - "--new-password={{ greenbone_admin_password }}"
+  register: greenbone_docker_password_result
+  retries: "{{ greenbone_docker_password_retries }}"
+  delay: "{{ greenbone_docker_password_delay }}"
+  until: greenbone_docker_password_result.rc == 0
+  changed_when: true
+  no_log: true
+  when: greenbone_admin_password | length > 0
+
+- name: Display Greenbone Docker access information
+  ansible.builtin.debug:
+    msg:
+      - "Greenbone Community Containers are starting. Initial feed loading can take a long time."
+      - "GSA HTTPS URL: https://{{ greenbone_web_bind_address }}:{{ greenbone_web_https_port }}"
+      - "Alternative GSAD URL: https://{{ greenbone_web_bind_address }}:{{ greenbone_web_gsad_port }}"
+      - "Admin user: {{ greenbone_admin_user }}"

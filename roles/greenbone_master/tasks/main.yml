@@ -1,0 +1,21 @@
+---
+- name: Ensure common facts are available
+  ansible.builtin.include_role:
+    name: greenbone_common
+  when: greenbone_effective_install_mode is not defined
+
+- name: Run master preflight checks
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Install Docker engine for container mode
+  ansible.builtin.include_role:
+    name: greenbone_docker
+  when: greenbone_effective_install_mode == 'docker'
+
+- name: Install Greenbone master with Docker
+  ansible.builtin.include_tasks: docker.yml
+  when: greenbone_effective_install_mode == 'docker'
+
+- name: Install Greenbone master natively
+  ansible.builtin.include_tasks: native.yml
+  when: greenbone_effective_install_mode == 'native'

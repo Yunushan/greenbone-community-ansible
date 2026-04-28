@@ -1,0 +1,16 @@
+---
+greenbone_worker_ospd_port: 9390
+greenbone_worker_bind_address: "0.0.0.0"
+greenbone_worker_scanner_name: "{{ inventory_hostname }}"
+greenbone_worker_tls_enabled: false
+greenbone_worker_tls_dir: "{{ greenbone_work_dir }}/tls"
+greenbone_worker_compose_pull: true
+
+greenbone_worker_native_packages:
+  - openvas-scanner
+  - ospd-openvas
+  - notus-scanner
+  - redis-server
+
+greenbone_worker_ospd_config_path: /etc/gvm/ospd-openvas.conf
+greenbone_worker_ospd_service: ospd-openvas

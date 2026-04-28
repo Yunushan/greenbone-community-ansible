@@ -1,0 +1,61 @@
+---
+- name: Register optional worker scanners with Greenbone master
+  hosts: greenbone_masters
+  become: true
+  gather_facts: true
+  vars:
+    greenbone_worker_registration_enabled: false
+  roles:
+    - role: greenbone_common
+  tasks:
+    - name: Guard worker registration
+      ansible.builtin.assert:
+        that:
+          - greenbone_worker_registration_enabled | bool
+        fail_msg: >-
+          Worker registration is disabled by default because remote OSP scanners
+          require certificate handling. Set greenbone_worker_registration_enabled=true
+          after configuring worker certificates and reviewing docs/architecture.md.
+
+    - name: Register workers on native Greenbone master
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - "{{ greenbone_gvmd_user }}"
+          - --
+          - gvmd
+          - "--create-scanner={{ hostvars[item].greenbone_worker_scanner_name | default(item) }}"
+          - "--scanner-host={{ hostvars[item].ansible_host | default(item) }}"
+          - "--scanner-port={{ hostvars[item].greenbone_worker_ospd_port | default(greenbone_worker_ospd_port) }}"
+          - "--scanner-type=OSP"
+          - "--scanner-ca-pub={{ greenbone_scanner_ca_pub }}"
+          - "--scanner-key-pub={{ greenbone_scanner_key_pub }}"
+          - "--scanner-key-priv={{ greenbone_scanner_key_priv }}"
+      loop: "{{ groups.get('greenbone_workers', []) }}"
+      changed_when: true
+      when: greenbone_effective_install_mode == 'native'
+
+    - name: Register workers on Docker Greenbone master
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_work_dir }}/compose.yaml"
+          - exec
+          - -T
+          - -u
+          - gvmd
+          - gvmd
+          - gvmd
+          - "--create-scanner={{ hostvars[item].greenbone_worker_scanner_name | default(item) }}"
+          - "--scanner-host={{ hostvars[item].ansible_host | default(item) }}"
+          - "--scanner-port={{ hostvars[item].greenbone_worker_ospd_port | default(greenbone_worker_ospd_port) }}"
+          - "--scanner-type=OSP"
+          - "--scanner-ca-pub={{ greenbone_scanner_ca_pub }}"
+          - "--scanner-key-pub={{ greenbone_scanner_key_pub }}"
+          - "--scanner-key-priv={{ greenbone_scanner_key_priv }}"
+      loop: "{{ groups.get('greenbone_workers', []) }}"
+      changed_when: true
+      when: greenbone_effective_install_mode == 'docker'

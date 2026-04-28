@@ -1,0 +1,22 @@
+---
+- name: Prepare Greenbone hosts
+  hosts: greenbone_masters:greenbone_workers
+  become: true
+  gather_facts: true
+  roles:
+    - role: greenbone_common
+
+- name: Install Greenbone master node
+  hosts: greenbone_masters
+  become: true
+  gather_facts: true
+  serial: 1
+  roles:
+    - role: greenbone_master
+
+- name: Install optional Greenbone scanner worker nodes
+  hosts: greenbone_workers
+  become: true
+  gather_facts: true
+  roles:
+    - role: greenbone_worker

@@ -1,0 +1,16 @@
+---
+- name: Validate Docker web port values
+  ansible.builtin.assert:
+    that:
+      - greenbone_web_https_port | int > 0
+      - greenbone_web_gsad_port | int > 0
+      - greenbone_web_https_port | int < 65536
+      - greenbone_web_gsad_port | int < 65536
+    fail_msg: "Web ports must be between 1 and 65535."
+
+- name: Warn when web interface is exposed beyond localhost
+  ansible.builtin.debug:
+    msg: >-
+      Greenbone web UI will bind to {{ greenbone_web_bind_address }}.
+      Ensure firewall, VPN, or reverse proxy controls are in place.
+  when: greenbone_web_bind_address not in ['127.0.0.1', 'localhost', '::1']
