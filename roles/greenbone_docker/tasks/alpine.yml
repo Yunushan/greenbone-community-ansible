@@ -7,6 +7,6 @@
 
 - name: Enable Docker OpenRC service on Alpine
   ansible.builtin.command: rc-update add docker default
-  register: greenbone_alpine_rc_update
-  changed_when: "'service docker added' in greenbone_alpine_rc_update.stdout"
+  register: greenbone_docker_alpine_rc_update
+  changed_when: "'service docker added' in greenbone_docker_alpine_rc_update.stdout"
   failed_when: false

@@ -67,10 +67,10 @@
       - gvmd
       - "--user={{ greenbone_admin_user }}"
       - "--new-password={{ greenbone_admin_password }}"
-  register: greenbone_docker_password_result
+  register: greenbone_master_docker_password_result
   retries: "{{ greenbone_docker_password_retries }}"
   delay: "{{ greenbone_docker_password_delay }}"
-  until: greenbone_docker_password_result.rc == 0
+  until: greenbone_master_docker_password_result.rc == 0
   changed_when: true
   no_log: true
   when: greenbone_admin_password | length > 0

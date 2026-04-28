@@ -16,15 +16,15 @@
 - name: Check whether Greenbone native setup marker exists
   ansible.builtin.stat:
     path: "{{ greenbone_native_setup_marker_path }}"
-  register: greenbone_native_setup_marker
+  register: greenbone_master_native_setup_marker
 
 - name: Run Greenbone native setup
   ansible.builtin.command: gvm-setup
-  register: greenbone_native_setup_result
+  register: greenbone_master_native_setup_result
   changed_when: true
   no_log: true
   when:
-    - greenbone_native_setup_force | bool or not greenbone_native_setup_marker.stat.exists
+    - greenbone_native_setup_force | bool or not greenbone_master_native_setup_marker.stat.exists
 
 - name: Start native Greenbone services
   ansible.builtin.command: "{{ greenbone_native_start_command }}"
@@ -49,7 +49,7 @@
   ansible.builtin.stat:
     path: "{{ item }}"
   loop: "{{ greenbone_gsad_service_paths }}"
-  register: greenbone_gsad_service_file_stats
+  register: greenbone_master_gsad_service_file_stats
   when:
     - ansible_service_mgr == 'systemd'
     - greenbone_web_bind_address not in ['127.0.0.1', 'localhost', '::1']
@@ -59,7 +59,7 @@
     path: "{{ item.stat.path }}"
     regexp: '--listen=127\.0\.0\.1'
     replace: "--listen={{ greenbone_web_bind_address }}"
-  loop: "{{ greenbone_gsad_service_file_stats.results | default([]) }}"
+  loop: "{{ greenbone_master_gsad_service_file_stats.results | default([]) }}"
   when:
     - item.stat.exists | default(false)
     - ansible_service_mgr == 'systemd'
@@ -70,10 +70,10 @@
 
 - name: Run native Greenbone setup check
   ansible.builtin.command: "{{ greenbone_native_check_command }}"
-  register: greenbone_native_check_result
+  register: greenbone_master_native_check_result
   changed_when: false
   failed_when: false
 
 - name: Show native setup check result
   ansible.builtin.debug:
-    var: greenbone_native_check_result.stdout_lines
+    var: greenbone_master_native_check_result.stdout_lines
