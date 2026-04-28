@@ -35,7 +35,10 @@
 
 - name: Add Docker official apt repository
   ansible.builtin.apt_repository:
-    repo: "deb [arch={{ greenbone_docker_apt_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ greenbone_docker_apt_repo_distribution }} {{ ansible_distribution_release }} stable"
+    repo: >-
+      deb [arch={{ greenbone_docker_apt_arch }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/{{ greenbone_docker_apt_repo_distribution }}
+      {{ ansible_distribution_release }} stable
     filename: docker
     state: present
     update_cache: true
