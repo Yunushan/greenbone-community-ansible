@@ -30,6 +30,36 @@
     replace: "{{ greenbone_web_bind_address }}:{{ greenbone_web_gsad_port }}:9392"
   when: greenbone_docker_patch_web_ports | bool
 
+- name: Read patched Greenbone Docker compose file
+  ansible.builtin.slurp:
+    src: "{{ greenbone_work_dir }}/compose.yaml"
+  register: greenbone_master_compose_file
+  when: greenbone_docker_patch_web_ports | bool
+
+- name: Assert Greenbone Docker compose web port mappings are patched
+  ansible.builtin.assert:
+    that:
+      - >-
+        greenbone_web_bind_address ~ ':' ~ (greenbone_web_https_port | string) ~ ':443'
+        in (greenbone_master_compose_file.content | b64decode)
+      - >-
+        greenbone_web_bind_address ~ ':' ~ (greenbone_web_gsad_port | string) ~ ':9392'
+        in (greenbone_master_compose_file.content | b64decode)
+    fail_msg: >-
+      The Greenbone Docker compose file did not contain the expected patched web
+      port mappings. The upstream compose file format may have changed.
+  when: greenbone_docker_patch_web_ports | bool
+
+- name: Validate Greenbone Docker compose configuration
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ greenbone_work_dir }}/compose.yaml"
+      - config
+  changed_when: false
+
 - name: Pull Greenbone Community Container images
   ansible.builtin.command:
     argv:
@@ -66,14 +96,14 @@
       - gvmd
       - gvmd
       - "--user={{ greenbone_admin_user }}"
-      - "--new-password={{ greenbone_admin_password }}"
+      - "--new-password={{ greenbone_master_effective_admin_password }}"
   register: greenbone_master_docker_password_result
   retries: "{{ greenbone_docker_password_retries }}"
   delay: "{{ greenbone_docker_password_delay }}"
   until: greenbone_master_docker_password_result.rc == 0
   changed_when: true
   no_log: true
-  when: greenbone_admin_password | length > 0
+  when: greenbone_master_effective_admin_password | length > 0
 
 - name: Display Greenbone Docker access information
   ansible.builtin.debug:

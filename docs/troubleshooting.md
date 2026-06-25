@@ -32,6 +32,18 @@ Native packaging differs by distribution. Use Docker mode for the widest support
 greenbone_install_mode: docker
 ```
 
+## Rocky Linux 9/10 Docker setup fails
+
+Rocky Linux support is Docker-only in this project. Check:
+
+1. `greenbone_install_mode` is `docker`.
+2. The target is Rocky Linux 9 or 10.
+3. The target architecture is x86_64 or aarch64.
+4. `greenbone_docker_use_official_repo` is `true` when the role installs Docker.
+5. The host can reach `download.docker.com` and `registry.community.greenbone.net`.
+6. Conflicting Docker or Podman compatibility packages were removed by the Docker role.
+7. The Docker service is running: `sudo systemctl status docker`.
+
 ## I cannot access the web UI from another machine
 
 The default bind address is localhost for safety. Expose it only if you have access controls:

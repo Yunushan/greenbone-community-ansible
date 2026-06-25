@@ -8,7 +8,7 @@
 
 ## التوزيعات المدعومة
 
-Ubuntu و Debian و Kali Linux و RHEL و AlmaLinux و Rocky Linux و Oracle Linux و Alpine Linux.
+Ubuntu و Debian و Kali Linux و RHEL و AlmaLinux و Rocky Linux 9/10 و Oracle Linux و Alpine Linux.
 
 ## أوضاع التثبيت
 

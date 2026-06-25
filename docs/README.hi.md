@@ -8,7 +8,7 @@
 
 ## समर्थित वितरण
 
-Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux, Oracle Linux और Alpine Linux।
+Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux 9/10, Oracle Linux और Alpine Linux।
 
 ## इंस्टॉलेशन मोड
 

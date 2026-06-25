@@ -1,0 +1,214 @@
+---
+- name: Validate Rocky Linux standalone Docker installation
+  hosts: greenbone_masters
+  become: true
+  gather_facts: true
+  vars:
+    greenbone_validate_work_dir: "{{ greenbone_work_dir | default('/opt/greenbone-community') }}"
+    greenbone_validate_web_https_port: "{{ greenbone_web_https_port | default(443) }}"
+    greenbone_validate_compose_file: "{{ greenbone_validate_work_dir }}/compose.yaml"
+    greenbone_validate_evidence_dir: "{{ lookup('env', 'PWD') + '/.secrets/rocky-standalone-evidence' }}"
+    greenbone_validate_admin_password_file: >-
+      {{
+        (greenbone_controller_secret_dir | default(lookup('env', 'PWD') + '/.secrets'))
+        + '/greenbone_admin_password'
+      }}
+    greenbone_validate_supported_architectures: "{{ greenbone_rocky_docker_supported_architectures | default(['x86_64', 'aarch64']) }}"
+    greenbone_validate_service_retries: 30
+    greenbone_validate_service_delay: 10
+    greenbone_validate_required_running_services:
+      - gsa
+      - gsad
+      - gvmd
+      - nginx
+      - ospd-openvas
+      - pg-gvm
+      - redis-server
+  tasks:
+    - name: Assert target is supported Rocky Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution | lower | regex_replace('[^a-z0-9]', '') == 'rocky'
+          - ansible_distribution_major_version | int in [9, 10]
+          - ansible_architecture in greenbone_validate_supported_architectures
+          - >-
+            greenbone_expected_rocky_major_version is not defined or
+            ansible_distribution_major_version | int == greenbone_expected_rocky_major_version | int
+        fail_msg: "This validation playbook supports Rocky Linux 9 and 10 on x86_64 or aarch64 only."
+
+    - name: Check Docker service status
+      ansible.builtin.service_facts:
+
+    - name: Assert Docker service is running
+      ansible.builtin.assert:
+        that:
+          - "'docker.service' in ansible_facts.services"
+          - ansible_facts.services['docker.service'].state == 'running'
+        fail_msg: "Docker service is not running on the Rocky standalone host."
+
+    - name: Check Greenbone compose file exists
+      ansible.builtin.stat:
+        path: "{{ greenbone_validate_compose_file }}"
+      register: greenbone_validate_compose_file_stat
+
+    - name: Assert Greenbone compose file exists
+      ansible.builtin.assert:
+        that:
+          - greenbone_validate_compose_file_stat.stat.exists
+          - greenbone_validate_compose_file_stat.stat.isreg
+        fail_msg: "Greenbone compose file is missing at {{ greenbone_validate_compose_file }}."
+
+    - name: Validate Greenbone compose configuration
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_validate_compose_file }}"
+          - config
+      changed_when: false
+
+    - name: List Greenbone compose services
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_validate_compose_file }}"
+          - ps
+      register: greenbone_validate_compose_ps
+      changed_when: false
+
+    - name: List running Greenbone compose services
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_validate_compose_file }}"
+          - ps
+          - --services
+          - --status
+          - running
+      register: greenbone_validate_running_services
+      changed_when: false
+      retries: "{{ greenbone_validate_service_retries }}"
+      delay: "{{ greenbone_validate_service_delay }}"
+      until: >-
+        greenbone_validate_required_running_services
+        | difference(greenbone_validate_running_services.stdout_lines)
+        | length == 0
+
+    - name: Check Docker version
+      ansible.builtin.command:
+        argv:
+          - docker
+          - --version
+      register: greenbone_validate_docker_version
+      changed_when: false
+
+    - name: Check Docker Compose version
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - version
+      register: greenbone_validate_compose_version
+      changed_when: false
+
+    - name: Check generated admin password file
+      ansible.builtin.stat:
+        path: "{{ greenbone_validate_admin_password_file }}"
+      register: greenbone_validate_admin_password_file_stat
+      delegate_to: localhost
+      become: false
+      when: greenbone_admin_password | default('') | length == 0
+
+    - name: Assert generated admin password file exists, is not empty, and is private
+      ansible.builtin.assert:
+        that:
+          - greenbone_validate_admin_password_file_stat.stat.exists
+          - greenbone_validate_admin_password_file_stat.stat.isreg
+          - greenbone_validate_admin_password_file_stat.stat.size | int > 0
+          - greenbone_validate_admin_password_file_stat.stat.mode == '0600'
+        fail_msg: >-
+          Generated admin password file is missing, empty, or not mode 0600 on
+          the Ansible controller at {{ greenbone_validate_admin_password_file }}.
+      delegate_to: localhost
+      become: false
+      when: greenbone_admin_password | default('') | length == 0
+
+    - name: Assert Greenbone compose stack has running service output
+      ansible.builtin.assert:
+        that:
+          - greenbone_validate_compose_ps.stdout | length > 0
+        fail_msg: "Docker Compose did not return Greenbone service status output."
+
+    - name: Assert required Greenbone services are running
+      ansible.builtin.assert:
+        that:
+          - >-
+            greenbone_validate_required_running_services
+            | difference(greenbone_validate_running_services.stdout_lines)
+            | length == 0
+        fail_msg: >-
+          Required Greenbone services are not running:
+          {{
+            greenbone_validate_required_running_services
+            | difference(greenbone_validate_running_services.stdout_lines)
+            | join(', ')
+          }}
+
+    - name: Probe local Greenbone web endpoint
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ greenbone_validate_web_https_port }}"
+        validate_certs: false
+        status_code:
+          - 200
+          - 301
+          - 302
+      register: greenbone_validate_web_probe
+      retries: 6
+      delay: 10
+      until: greenbone_validate_web_probe is succeeded
+
+    - name: Ensure local validation evidence directory exists
+      ansible.builtin.file:
+        path: "{{ greenbone_validate_evidence_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Write local validation evidence report
+      ansible.builtin.copy:
+        dest: "{{ greenbone_validate_evidence_dir }}/{{ inventory_hostname }}.json"
+        mode: "0600"
+        content: >-
+          {{
+            {
+              'host': inventory_hostname,
+              'distribution': ansible_distribution,
+              'distribution_version': ansible_distribution_version,
+              'distribution_major_version': ansible_distribution_major_version,
+              'architecture': ansible_architecture,
+              'expected_distribution_major_version': greenbone_expected_rocky_major_version | default('unset'),
+              'docker_version': greenbone_validate_docker_version.stdout,
+              'docker_compose_version': greenbone_validate_compose_version.stdout,
+              'admin_password_file_checked': greenbone_admin_password | default('') | length == 0,
+              'admin_password_file': greenbone_validate_admin_password_file,
+              'admin_password_file_exists': greenbone_validate_admin_password_file_stat.stat.exists | default(false),
+              'admin_password_file_size': greenbone_validate_admin_password_file_stat.stat.size | default(0),
+              'admin_password_file_mode': greenbone_validate_admin_password_file_stat.stat.mode | default('unchecked'),
+              'compose_file': greenbone_validate_compose_file,
+              'compose_ps': greenbone_validate_compose_ps.stdout_lines,
+              'running_services': greenbone_validate_running_services.stdout_lines,
+              'web_probe_status': greenbone_validate_web_probe.status | default('unknown')
+            } | to_nice_json
+          }}
+      delegate_to: localhost
+      become: false
+
+    - name: Show validation result
+      ansible.builtin.debug:
+        msg: "Rocky standalone Greenbone Docker validation passed on {{ inventory_hostname }}."

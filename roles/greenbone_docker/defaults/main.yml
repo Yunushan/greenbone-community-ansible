@@ -31,6 +31,7 @@ greenbone_docker_rpm_conflicting_packages:
   - docker-logrotate
   - docker-engine
   - podman-docker
+  - podman
   - containerd
   - runc
 

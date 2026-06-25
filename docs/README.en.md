@@ -8,7 +8,7 @@ The default is a single master node. The `greenbone_workers` group is empty.
 
 ## Supported distributions
 
-Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux, Oracle Linux, and Alpine Linux.
+Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux 9/10, Oracle Linux, and Alpine Linux.
 
 ## Installation modes
 
@@ -26,6 +26,18 @@ ansible-playbook -i inventories/single-master/hosts.yml site.yml
 ```
 
 The admin password is generated locally in `.secrets/greenbone_admin_password`.
+
+## Rocky Linux 9/10 standalone Docker
+
+Rocky Linux 9 and 10 are Docker-only standalone master targets on x86_64 and
+aarch64 in this project. Keep `greenbone_docker_use_official_repo: true` when
+the role installs Docker:
+
+```bash
+ansible-playbook -i inventories/rocky-standalone/hosts.yml site.yml
+```
+
+See [rocky-standalone.md](rocky-standalone.md) for the full runbook.
 
 ## Web UI
 

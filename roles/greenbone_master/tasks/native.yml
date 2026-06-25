@@ -40,10 +40,10 @@
       - --
       - gvmd
       - "--user={{ greenbone_admin_user }}"
-      - "--new-password={{ greenbone_admin_password }}"
+      - "--new-password={{ greenbone_master_effective_admin_password }}"
   changed_when: true
   no_log: true
-  when: greenbone_admin_password | length > 0
+  when: greenbone_master_effective_admin_password | length > 0
 
 - name: Locate gsad systemd service files
   ansible.builtin.stat:

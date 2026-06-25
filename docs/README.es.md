@@ -8,7 +8,7 @@ La instalación predeterminada usa un único nodo maestro. El grupo `greenbone_w
 
 ## Distribuciones compatibles
 
-Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux, Oracle Linux y Alpine Linux.
+Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux 9/10, Oracle Linux y Alpine Linux.
 
 ## Modos de instalación
 

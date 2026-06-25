@@ -8,7 +8,7 @@
 
 ## 支持的发行版
 
-Ubuntu、Debian、Kali Linux、RHEL、AlmaLinux、Rocky Linux、Oracle Linux 和 Alpine Linux。
+Ubuntu、Debian、Kali Linux、RHEL、AlmaLinux、Rocky Linux 9/10、Oracle Linux 和 Alpine Linux。
 
 ## 安装模式
 

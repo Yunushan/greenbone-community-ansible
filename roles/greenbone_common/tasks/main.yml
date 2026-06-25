@@ -25,6 +25,24 @@
              (greenbone_install_mode == 'auto' and greenbone_distribution_normalized in greenbone_auto_native_distributions_normalized))
          else 'docker' }}
 
+- name: Assert Rocky Linux Docker standalone support
+  ansible.builtin.assert:
+    that:
+      - greenbone_effective_install_mode == 'docker'
+      - ansible_distribution_major_version | int in greenbone_rocky_docker_supported_major_versions
+      - ansible_architecture in greenbone_rocky_docker_supported_architectures
+      - >-
+        not (greenbone_install_docker_engine | default(true) | bool) or
+        (greenbone_docker_use_official_repo | default(true) | bool)
+    fail_msg: >-
+      Rocky Linux support is Docker-only and validated for major versions
+      {{ greenbone_rocky_docker_supported_major_versions | join(', ') }}
+      on architectures {{ greenbone_rocky_docker_supported_architectures | join(', ') }}.
+      Use greenbone_install_mode=docker on a supported Rocky Linux host. When
+      this role installs Docker on Rocky Linux, keep
+      greenbone_docker_use_official_repo=true.
+  when: greenbone_distribution_normalized == 'rocky'
+
 - name: Install common prerequisites on Debian family
   ansible.builtin.apt:
     name:

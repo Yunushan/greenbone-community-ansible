@@ -14,3 +14,49 @@
       Greenbone web UI will bind to {{ greenbone_web_bind_address }}.
       Ensure firewall, VPN, or reverse proxy controls are in place.
   when: greenbone_web_bind_address not in ['127.0.0.1', 'localhost', '::1']
+
+- name: Set generated Greenbone admin password file path
+  ansible.builtin.set_fact:
+    greenbone_master_generated_admin_password_file: >-
+      {{
+        (greenbone_controller_secret_dir | default(lookup('env', 'PWD') + '/.secrets'))
+        + '/greenbone_admin_password'
+      }}
+
+- name: Use configured Greenbone admin password
+  ansible.builtin.set_fact:
+    greenbone_master_effective_admin_password: "{{ greenbone_admin_password | default('') }}"
+  no_log: true
+  when: greenbone_admin_password | default('') | length > 0
+
+- name: Generate Greenbone admin password
+  ansible.builtin.set_fact:
+    greenbone_master_effective_admin_password: >-
+      {{
+        lookup(
+          'ansible.builtin.password',
+          greenbone_master_generated_admin_password_file,
+          length=32,
+          chars=['ascii_letters', 'digits']
+        )
+      }}
+  no_log: true
+  when: greenbone_admin_password | default('') | length == 0
+
+- name: Assert Greenbone admin password is available
+  ansible.builtin.assert:
+    that:
+      - greenbone_master_effective_admin_password | default('') | length > 0
+    fail_msg: >-
+      Greenbone admin password is empty. Set greenbone_admin_password or remove
+      the empty generated password file and rerun the playbook.
+    quiet: true
+
+- name: Secure generated Greenbone admin password file
+  ansible.builtin.file:
+    path: "{{ greenbone_master_generated_admin_password_file }}"
+    state: file
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: greenbone_admin_password | default('') | length == 0

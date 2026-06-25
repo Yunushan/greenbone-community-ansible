@@ -1,0 +1,120 @@
+---
+name: rocky-standalone-acceptance
+
+'on':
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: GitHub Actions runner label that can SSH to both Rocky hosts.
+        required: true
+        default: ubuntu-latest
+
+jobs:
+  rocky-standalone-acceptance:
+    name: Rocky 9/10 standalone acceptance
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 180
+    env:
+      ROCKY9_HOST: ${{ secrets.ROCKY9_HOST }}
+      ROCKY10_HOST: ${{ secrets.ROCKY10_HOST }}
+      ROCKY_SSH_USER: ${{ secrets.ROCKY_SSH_USER }}
+      ROCKY_SSH_PRIVATE_KEY: ${{ secrets.ROCKY_SSH_PRIVATE_KEY }}
+      ROCKY_SSH_KNOWN_HOSTS: ${{ secrets.ROCKY_SSH_KNOWN_HOSTS }}
+      ROCKY_SSH_PORT: ${{ vars.ROCKY_SSH_PORT || '22' }}
+      ACCEPTANCE_INVENTORY: inventories/rocky-standalone/hosts.acceptance.yml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Validate acceptance inputs
+        shell: bash
+        run: |
+          missing=0
+          for name in ROCKY9_HOST ROCKY10_HOST ROCKY_SSH_USER ROCKY_SSH_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret ${name}"
+              missing=1
+            fi
+          done
+          if ! [[ "${ROCKY_SSH_PORT}" =~ ^[0-9]+$ ]] || [ "${ROCKY_SSH_PORT}" -lt 1 ] || [ "${ROCKY_SSH_PORT}" -gt 65535 ]; then
+            echo "::error::ROCKY_SSH_PORT must be an integer between 1 and 65535"
+            missing=1
+          fi
+          exit "${missing}"
+
+      - name: Install Ansible dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ansible-core
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: Configure SSH for Rocky hosts
+        shell: bash
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${ROCKY_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [ -n "${ROCKY_SSH_KNOWN_HOSTS}" ]; then
+            printf '%s\n' "${ROCKY_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${ROCKY_SSH_PORT}" -H "${ROCKY9_HOST}" "${ROCKY10_HOST}" > ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Render acceptance inventory
+        shell: bash
+        run: |
+          cat > "${ACCEPTANCE_INVENTORY}" <<EOF
+          ---
+          all:
+            vars:
+              greenbone_install_mode: docker
+              greenbone_docker_use_official_repo: true
+              greenbone_web_bind_address: "127.0.0.1"
+              ansible_user: "${ROCKY_SSH_USER}"
+              ansible_port: ${ROCKY_SSH_PORT}
+              ansible_ssh_private_key_file: "${HOME}/.ssh/id_ed25519"
+            children:
+              greenbone_masters:
+                hosts:
+                  rocky9-standalone:
+                    ansible_host: "${ROCKY9_HOST}"
+                    greenbone_expected_rocky_major_version: 9
+                  rocky10-standalone:
+                    ansible_host: "${ROCKY10_HOST}"
+                    greenbone_expected_rocky_major_version: 10
+              greenbone_workers:
+                hosts: {}
+          EOF
+
+      - name: Show acceptance inventory hosts
+        run: ansible-inventory -i "${ACCEPTANCE_INVENTORY}" --list
+
+      - name: Verify Rocky SSH and sudo access
+        run: ansible greenbone_masters -i "${ACCEPTANCE_INVENTORY}" -m ansible.builtin.ping --become
+
+      - name: Clear previous Rocky acceptance evidence
+        run: rm -rf .secrets/rocky-standalone-evidence
+
+      - name: Install Greenbone on Rocky standalone hosts
+        run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" site.yml
+
+      - name: Validate Rocky standalone hosts
+        run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" playbooks/validate-rocky-standalone.yml
+
+      - name: Validate Rocky acceptance evidence
+        run: python3 scripts/dev/Test-RockyAcceptanceEvidence.py
+
+      - name: Upload Rocky acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rocky-standalone-evidence
+          path: .secrets/rocky-standalone-evidence/*.json
+          if-no-files-found: warn

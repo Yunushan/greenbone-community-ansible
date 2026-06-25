@@ -10,7 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
+
+      - name: Run support matrix validation
+        shell: pwsh
+        run: |
+          ./scripts/dev/Test-SupportMatrix.ps1
+          ./scripts/dev/Test-RockyStandaloneSupport.ps1
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -23,8 +29,32 @@ jobs:
           python -m pip install ansible-core ansible-lint yamllint
           ansible-galaxy collection install -r requirements.yml
 
+      - name: Run Rocky standalone Ansible syntax validation
+        run: |
+          ansible-playbook -i inventories/rocky-standalone/hosts.yml site.yml --syntax-check
+          ansible-playbook -i inventories/rocky-standalone/hosts.yml playbooks/validate-rocky-standalone.yml --syntax-check
+          ansible-playbook -i inventories/rocky-standalone/hosts.yml site.yml --list-hosts
+
       - name: Run ansible-lint
         run: ansible-lint
 
       - name: Run yamllint
         run: yamllint .
+
+  rocky-standalone-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run Rocky Docker repository metadata validation
+        run: python3 scripts/dev/Test-RockyDockerRepoMetadata.py
+
+      - name: Run Greenbone container platform validation
+        run: python3 scripts/dev/Test-GreenboneContainerPlatforms.py
+
+      - name: Run Rocky acceptance evidence validation self-test
+        run: python3 scripts/dev/Test-RockyAcceptanceEvidence.py --self-test
+
+      - name: Run Rocky Docker repository smoke validation
+        run: bash scripts/dev/Test-RockyDockerRepo.sh

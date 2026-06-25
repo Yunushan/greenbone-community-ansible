@@ -5,9 +5,11 @@
 | Variable | Default | Description |
 |---|---:|---|
 | `greenbone_install_mode` | `auto` | `auto`, `docker`, or `native`. |
+| `greenbone_rocky_docker_supported_major_versions` | `[9, 10]` | Rocky Linux major versions validated for Docker-only standalone installs. |
+| `greenbone_rocky_docker_supported_architectures` | `[x86_64, aarch64]` | Rocky Linux architectures validated for Docker-only standalone installs. |
 | `greenbone_work_dir` | `/opt/greenbone-community` | Directory used on target hosts. |
 | `greenbone_admin_user` | `admin` | Greenbone administrator account. |
-| `greenbone_admin_password` | generated in `.secrets/` | Admin password generated on the Ansible controller. |
+| `greenbone_admin_password` | `""` | Admin password. Empty generates `.secrets/greenbone_admin_password` on the Ansible controller. |
 | `greenbone_web_bind_address` | `127.0.0.1` | GSA bind address in Docker mode and optional native patching. |
 | `greenbone_web_https_port` | `443` | Host HTTPS port for Docker nginx. |
 | `greenbone_web_gsad_port` | `9392` | Host GSAD port for Docker nginx. |
@@ -54,6 +56,13 @@ For fully Docker-based installation on all nodes:
 
 ```yaml
 greenbone_install_mode: docker
+```
+
+For Rocky Linux 9/10 standalone installs on x86_64 or aarch64, keep Docker mode:
+
+```yaml
+greenbone_install_mode: docker
+greenbone_docker_use_official_repo: true
 ```
 
 For Kali native installation:

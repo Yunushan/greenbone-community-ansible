@@ -9,7 +9,7 @@ The project is designed for:
 - Kali Linux
 - Red Hat Enterprise Linux
 - AlmaLinux
-- Rocky Linux
+- Rocky Linux 9/10 (Docker standalone)
 - Oracle Linux
 - Alpine Linux
 
@@ -133,6 +133,20 @@ all:
 ```
 
 Worker nodes deploy scanner components. Registering remote scanners into `gvmd` requires certificate handling and is disabled by default. See [docs/architecture.md](docs/architecture.md).
+
+### Rocky Linux 9/10 standalone Docker
+
+Rocky Linux 9 and 10 are supported as Docker-only standalone master targets on
+x86_64 and aarch64. This path uses Docker's CentOS RPM repository, so leave
+`greenbone_docker_use_official_repo: true` when the role installs Docker.
+Use the dedicated inventory as a starting point:
+
+```bash
+ansible-playbook -i inventories/rocky-standalone/hosts.yml site.yml
+```
+
+See [docs/support-matrix.md](docs/support-matrix.md) for the support boundary and upstream evidence.
+Use [docs/rocky-standalone.md](docs/rocky-standalone.md) for the full Rocky Linux runbook.
 
 ## Useful commands
 

@@ -1,10 +1,11 @@
 ---
-- name: Set Docker RPM repository URL
+- name: Set Docker RPM repository facts
   ansible.builtin.set_fact:
-    greenbone_docker_rpm_repo_url: >-
-      {{ 'https://download.docker.com/linux/rhel/docker-ce.repo'
+    greenbone_docker_rpm_repo_family: >-
+      {{ 'rhel'
          if greenbone_distribution_normalized in ['redhat', 'redhatenterpriselinux']
-         else 'https://download.docker.com/linux/centos/docker-ce.repo' }}
+         else 'centos' }}
+    greenbone_docker_rpm_repo_url: "https://download.docker.com/linux/{{ greenbone_docker_rpm_repo_family }}/docker-ce.repo"
 
 - name: Remove conflicting Docker RPM packages
   ansible.builtin.dnf:
