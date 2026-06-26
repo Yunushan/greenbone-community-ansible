@@ -4,11 +4,19 @@
 
 | Variable | Default | Description |
 |---|---:|---|
-| `greenbone_install_mode` | `auto` | `auto`, `docker`, or `native`. |
+| `greenbone_install_mode` | `auto` | `auto`, `docker`, or `native`; Rocky Linux 9/10 standalone installs must set `docker` explicitly. |
 | `greenbone_rocky_docker_supported_major_versions` | `[9, 10]` | Rocky Linux major versions validated for Docker-only standalone installs. |
 | `greenbone_rocky_docker_supported_architectures` | `[x86_64, aarch64]` | Rocky Linux architectures validated for Docker-only standalone installs. |
+| `greenbone_rocky10_min_ansible_core_version` | `2.19.0` | Minimum controller `ansible-core` version for Rocky Linux 10 package tasks. |
+| `greenbone_rocky_preflight_min_cpu_cores` | `4` | Minimum CPU cores for the Rocky standalone preflight. |
+| `greenbone_rocky_preflight_min_memory_mb` | `8192` | Minimum RAM in MB for the Rocky standalone preflight. |
+| `greenbone_rocky_preflight_min_disk_mb` | `61440` | Minimum free disk in MB for the Rocky standalone preflight. |
+| `greenbone_rocky_preflight_disk_check_path` | Parent of `greenbone_work_dir` | Filesystem path checked for free disk during Rocky standalone preflight. |
+| `greenbone_rocky_validate_service_retries` | `60` | Required-service readiness retries for Rocky standalone validation. |
+| `greenbone_rocky_validate_service_delay` | `15` | Delay in seconds between Rocky standalone validation readiness retries. |
 | `greenbone_work_dir` | `/opt/greenbone-community` | Directory used on target hosts. |
 | `greenbone_admin_user` | `admin` | Greenbone administrator account. |
+| `greenbone_controller_secret_dir` | `.secrets` under the controller working directory | Local directory for generated controller-side secrets. |
 | `greenbone_admin_password` | `""` | Admin password. Empty generates `.secrets/greenbone_admin_password` on the Ansible controller. |
 | `greenbone_web_bind_address` | `127.0.0.1` | GSA bind address in Docker mode and optional native patching. |
 | `greenbone_web_https_port` | `443` | Host HTTPS port for Docker nginx. |

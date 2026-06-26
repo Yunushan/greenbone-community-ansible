@@ -6,6 +6,7 @@
          if greenbone_distribution_normalized in ['redhat', 'redhatenterpriselinux']
          else 'centos' }}
     greenbone_docker_rpm_repo_url: "https://download.docker.com/linux/{{ greenbone_docker_rpm_repo_family }}/docker-ce.repo"
+    greenbone_docker_rpm_gpg_key_url: "https://download.docker.com/linux/{{ greenbone_docker_rpm_repo_family }}/gpg"
 
 - name: Remove conflicting Docker RPM packages
   ansible.builtin.dnf:
@@ -19,7 +20,6 @@
     name:
       - dnf-plugins-core
     state: present
-  failed_when: false
 
 - name: Add Docker RPM repository
   ansible.builtin.get_url:
@@ -28,6 +28,13 @@
     owner: root
     group: root
     mode: "0644"
+  when: greenbone_docker_use_official_repo | bool
+
+- name: Import Docker RPM GPG key
+  ansible.builtin.rpm_key:
+    key: "{{ greenbone_docker_rpm_gpg_key_url }}"
+    fingerprint: "{{ greenbone_docker_rpm_gpg_fingerprint }}"
+    state: present
   when: greenbone_docker_use_official_repo | bool
 
 - name: Install Docker RPM packages

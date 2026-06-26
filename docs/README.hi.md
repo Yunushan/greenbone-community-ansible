@@ -12,7 +12,9 @@ Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux 9/10, Oracle Linux औ�
 
 ## इंस्टॉलेशन मोड
 
-`greenbone_install_mode: auto` Kali पर native `gvm` पैकेज का उपयोग करता है और अन्य समर्थित सिस्टम पर Docker मोड का उपयोग करता है। आप मोड को जबरन सेट कर सकते हैं:
+`greenbone_install_mode: auto` Kali पर native `gvm` पैकेज का उपयोग करता है और अधिकांश अन्य समर्थित सिस्टम पर Docker मोड का उपयोग करता है।
+Rocky Linux 9/10 standalone इंस्टॉल के लिए `greenbone_install_mode: docker` स्पष्ट रूप से सेट करें।
+आप मोड को जबरन सेट कर सकते हैं:
 
 ```yaml
 greenbone_install_mode: docker

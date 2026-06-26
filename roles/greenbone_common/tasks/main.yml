@@ -28,20 +28,49 @@
 - name: Assert Rocky Linux Docker standalone support
   ansible.builtin.assert:
     that:
+      - greenbone_install_mode == 'docker'
       - greenbone_effective_install_mode == 'docker'
       - ansible_distribution_major_version | int in greenbone_rocky_docker_supported_major_versions
       - ansible_architecture in greenbone_rocky_docker_supported_architectures
-      - >-
-        not (greenbone_install_docker_engine | default(true) | bool) or
-        (greenbone_docker_use_official_repo | default(true) | bool)
+      - greenbone_docker_use_official_repo | default(true) | bool
     fail_msg: >-
       Rocky Linux support is Docker-only and validated for major versions
       {{ greenbone_rocky_docker_supported_major_versions | join(', ') }}
       on architectures {{ greenbone_rocky_docker_supported_architectures | join(', ') }}.
-      Use greenbone_install_mode=docker on a supported Rocky Linux host. When
-      this role installs Docker on Rocky Linux, keep
-      greenbone_docker_use_official_repo=true.
-  when: greenbone_distribution_normalized == 'rocky'
+      Use greenbone_install_mode=docker and
+      greenbone_docker_use_official_repo=true on a supported Rocky Linux host.
+  when: greenbone_distribution_normalized in ['rocky', 'rockylinux']
+
+- name: Assert controller ansible-core supports Rocky Linux 10
+  ansible.builtin.assert:
+    that:
+      - ansible_version.full is version(greenbone_rocky10_min_ansible_core_version, '>=')
+    fail_msg: >-
+      Rocky Linux 10 support requires ansible-core
+      {{ greenbone_rocky10_min_ansible_core_version }} or newer on the
+      controller so Red Hat family package tasks use a tested backend.
+      Upgrade ansible-core on the controller and rerun the playbook.
+  when:
+    - greenbone_distribution_normalized in ['rocky', 'rockylinux']
+    - ansible_distribution_major_version | int == 10
+
+- name: Bootstrap DNF5 Python bindings when target reports DNF5
+  ansible.builtin.raw: |
+    set -eu
+    if rpm -q python3-libdnf5 >/dev/null 2>&1; then
+      echo greenbone_dnf5_bootstrap=present
+    elif dnf -q list --available python3-libdnf5 >/dev/null 2>&1; then
+      dnf -y install python3-libdnf5
+      echo greenbone_dnf5_bootstrap=changed
+    else
+      echo greenbone_dnf5_bootstrap=unavailable
+      exit 1
+    fi
+  register: greenbone_common_rocky10_dnf5_bootstrap
+  changed_when: "'greenbone_dnf5_bootstrap=changed' in greenbone_common_rocky10_dnf5_bootstrap.stdout"
+  when:
+    - greenbone_distribution_normalized in ['rocky', 'rockylinux']
+    - ansible_pkg_mgr | default('') == 'dnf5'
 
 - name: Install common prerequisites on Debian family
   ansible.builtin.apt:

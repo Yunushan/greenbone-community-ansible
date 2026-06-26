@@ -1,0 +1,40 @@
+---
+- name: Bootstrap Rocky Linux standalone Python support
+  hosts: greenbone_masters:greenbone_workers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Ensure Rocky Linux has Python before fact gathering
+      ansible.builtin.raw: |
+        set -eu
+        if [ ! -r /etc/os-release ]; then
+          echo greenbone_rocky_python_bootstrap=skipped_no_os_release
+          exit 0
+        fi
+        . /etc/os-release
+        if [ "${ID:-}" != "rocky" ]; then
+          echo greenbone_rocky_python_bootstrap=skipped_non_rocky
+          exit 0
+        fi
+        rocky_major="${VERSION_ID:-}"
+        rocky_major="${rocky_major%%.*}"
+        packages="python3 python3-dnf python3-libdnf"
+        if [ "${rocky_major}" = "10" ] && dnf -q list --available python3-libdnf5 >/dev/null 2>&1; then
+          packages="${packages} python3-libdnf5"
+        fi
+        missing_packages=""
+        for package in ${packages}; do
+          if ! rpm -q "${package}" >/dev/null 2>&1; then
+            missing_packages="${missing_packages} ${package}"
+          fi
+        done
+        if [ -z "${missing_packages}" ]; then
+          echo greenbone_rocky_python_bootstrap=present
+          exit 0
+        fi
+        dnf -y install ${missing_packages}
+        echo greenbone_rocky_python_bootstrap=changed
+      register: greenbone_bootstrap_rocky_python_result
+      changed_when: >-
+        'greenbone_rocky_python_bootstrap=changed'
+        in greenbone_bootstrap_rocky_python_result.stdout

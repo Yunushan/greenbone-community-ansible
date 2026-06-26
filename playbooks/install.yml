@@ -1,4 +1,6 @@
 ---
+- import_playbook: bootstrap-rocky-standalone.yml
+
 - name: Prepare Greenbone hosts
   hosts: greenbone_masters:greenbone_workers
   become: true

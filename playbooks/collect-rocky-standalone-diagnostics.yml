@@ -1,0 +1,229 @@
+---
+- name: Collect Rocky Linux standalone Docker diagnostics
+  hosts: greenbone_masters
+  become: true
+  gather_facts: true
+  vars:
+    greenbone_diag_default_secret_dir: "{{ (lookup('env', 'PWD') | default('.', true)) + '/.secrets' }}"
+    greenbone_diag_secret_dir: "{{ greenbone_controller_secret_dir | default(greenbone_diag_default_secret_dir) }}"
+    greenbone_diag_dir: "{{ greenbone_diag_secret_dir }}/rocky-standalone-diagnostics"
+    greenbone_diag_work_dir: "{{ greenbone_work_dir | default('/opt/greenbone-community') }}"
+    greenbone_diag_compose_file: "{{ greenbone_diag_work_dir }}/compose.yaml"
+    greenbone_diag_docker_repo_file: /etc/yum.repos.d/docker-ce.repo
+    greenbone_diag_docker_repo_gpgcheck_marker: gpgcheck=1
+    greenbone_diag_docker_repo_gpgkey_marker: gpgkey=https://download.docker.com/linux/centos/gpg
+    greenbone_diag_docker_rpm_gpg_fingerprint: "{{ greenbone_docker_rpm_gpg_fingerprint | default('060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35') }}"
+    greenbone_diag_docker_rpm_gpg_key_id: "621e9f35"
+  tasks:
+    - name: Ensure local Rocky diagnostics directory exists
+      ansible.builtin.file:
+        path: "{{ greenbone_diag_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Check Docker service state for diagnostics
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - docker
+      register: greenbone_diag_docker_service
+      changed_when: false
+      failed_when: false
+
+    - name: Check Docker version for diagnostics
+      ansible.builtin.command:
+        argv:
+          - docker
+          - --version
+      register: greenbone_diag_docker_version
+      changed_when: false
+      failed_when: false
+
+    - name: Check Docker Compose version for diagnostics
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - version
+      register: greenbone_diag_compose_version
+      changed_when: false
+      failed_when: false
+
+    - name: Collect Docker info for diagnostics
+      ansible.builtin.command:
+        argv:
+          - docker
+          - info
+      register: greenbone_diag_docker_info
+      changed_when: false
+      failed_when: false
+
+    - name: Check Docker RPM repository file for diagnostics
+      ansible.builtin.stat:
+        path: "{{ greenbone_diag_docker_repo_file }}"
+      register: greenbone_diag_docker_repo_file_stat
+
+    - name: Read Docker RPM repository file for diagnostics
+      ansible.builtin.slurp:
+        src: "{{ greenbone_diag_docker_repo_file }}"
+      register: greenbone_diag_docker_repo_file_content
+      failed_when: false
+      when:
+        - greenbone_diag_docker_repo_file_stat.stat.exists
+        - greenbone_diag_docker_repo_file_stat.stat.isreg
+
+    - name: List imported RPM GPG keys for diagnostics
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -qa
+          - gpg-pubkey*
+      register: greenbone_diag_rpm_gpg_keys
+      changed_when: false
+      failed_when: false
+
+    - name: Check python3-libdnf5 package for diagnostics
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - --queryformat
+          - '%{NAME}\n'
+          - python3-libdnf5
+      register: greenbone_diag_python3_libdnf5
+      changed_when: false
+      failed_when: false
+
+    - name: Check Greenbone compose file for diagnostics
+      ansible.builtin.stat:
+        path: "{{ greenbone_diag_compose_file }}"
+      register: greenbone_diag_compose_file_stat
+
+    - name: Check SELinux state for diagnostics
+      ansible.builtin.command:
+        argv:
+          - getenforce
+      register: greenbone_diag_selinux
+      changed_when: false
+      failed_when: false
+
+    - name: Check firewalld state for diagnostics
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - --state
+      register: greenbone_diag_firewalld
+      changed_when: false
+      failed_when: false
+
+    - name: List Greenbone compose services for diagnostics
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_diag_compose_file }}"
+          - ps
+      register: greenbone_diag_compose_ps
+      changed_when: false
+      failed_when: false
+
+    - name: Collect recent Greenbone compose logs for diagnostics
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_diag_compose_file }}"
+          - logs
+          - --tail
+          - "200"
+      register: greenbone_diag_compose_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Check disk space for diagnostics
+      ansible.builtin.command:
+        argv:
+          - df
+          - -h
+          - "{{ greenbone_diag_work_dir }}"
+      register: greenbone_diag_disk
+      changed_when: false
+      failed_when: false
+
+    - name: Write local Rocky diagnostics report
+      ansible.builtin.copy:
+        dest: "{{ greenbone_diag_dir }}/{{ inventory_hostname }}.json"
+        mode: "0600"
+        content: >-
+          {{
+            {
+              'host': inventory_hostname,
+              'collected_at': ansible_date_time.iso8601,
+              'distribution': ansible_distribution,
+              'distribution_version': ansible_distribution_version,
+              'distribution_major_version': ansible_distribution_major_version,
+              'architecture': ansible_architecture,
+              'os_family': ansible_os_family,
+              'kernel': ansible_kernel | default('unknown'),
+              'package_manager': ansible_pkg_mgr | default('unknown'),
+              'dnf5_backend_checked': ansible_pkg_mgr | default('unknown') == 'dnf5',
+              'python3_libdnf5_installed': greenbone_diag_python3_libdnf5.rc == 0,
+              'python3_libdnf5_stdout': greenbone_diag_python3_libdnf5.stdout_lines,
+              'python3_libdnf5_stderr': greenbone_diag_python3_libdnf5.stderr_lines,
+              'ansible_core_version': ansible_version.full,
+              'docker_service_rc': greenbone_diag_docker_service.rc,
+              'docker_service_stdout': greenbone_diag_docker_service.stdout_lines,
+              'docker_service_stderr': greenbone_diag_docker_service.stderr_lines,
+              'docker_version_rc': greenbone_diag_docker_version.rc,
+              'docker_version_stdout': greenbone_diag_docker_version.stdout_lines,
+              'docker_version_stderr': greenbone_diag_docker_version.stderr_lines,
+              'docker_compose_version_rc': greenbone_diag_compose_version.rc,
+              'docker_compose_version_stdout': greenbone_diag_compose_version.stdout_lines,
+              'docker_compose_version_stderr': greenbone_diag_compose_version.stderr_lines,
+              'docker_info_rc': greenbone_diag_docker_info.rc,
+              'docker_info_stdout': greenbone_diag_docker_info.stdout_lines,
+              'docker_info_stderr': greenbone_diag_docker_info.stderr_lines,
+              'docker_rpm_repo_file': greenbone_diag_docker_repo_file,
+              'docker_rpm_repo_file_exists': greenbone_diag_docker_repo_file_stat.stat.exists,
+              'docker_rpm_repo_gpgcheck_enabled': (
+                greenbone_diag_docker_repo_gpgcheck_marker in
+                (greenbone_diag_docker_repo_file_content.content | default('') | b64decode)
+              ),
+              'docker_rpm_repo_gpgkey_url_present': (
+                greenbone_diag_docker_repo_gpgkey_marker in
+                (greenbone_diag_docker_repo_file_content.content | default('') | b64decode)
+              ),
+              'docker_rpm_gpg_key_fingerprint': greenbone_diag_docker_rpm_gpg_fingerprint,
+              'docker_rpm_gpg_key_id': greenbone_diag_docker_rpm_gpg_key_id,
+              'docker_rpm_gpg_key_imported': (
+                greenbone_diag_docker_rpm_gpg_key_id in
+                (greenbone_diag_rpm_gpg_keys.stdout | default('') | lower)
+              ),
+              'rpm_gpg_keys_stdout': greenbone_diag_rpm_gpg_keys.stdout_lines,
+              'rpm_gpg_keys_stderr': greenbone_diag_rpm_gpg_keys.stderr_lines,
+              'compose_file': greenbone_diag_compose_file,
+              'compose_file_exists': greenbone_diag_compose_file_stat.stat.exists,
+              'selinux_rc': greenbone_diag_selinux.rc,
+              'selinux_stdout': greenbone_diag_selinux.stdout_lines,
+              'selinux_stderr': greenbone_diag_selinux.stderr_lines,
+              'firewalld_rc': greenbone_diag_firewalld.rc,
+              'firewalld_stdout': greenbone_diag_firewalld.stdout_lines,
+              'firewalld_stderr': greenbone_diag_firewalld.stderr_lines,
+              'compose_ps_rc': greenbone_diag_compose_ps.rc,
+              'compose_ps_stdout': greenbone_diag_compose_ps.stdout_lines,
+              'compose_ps_stderr': greenbone_diag_compose_ps.stderr_lines,
+              'compose_logs_rc': greenbone_diag_compose_logs.rc,
+              'compose_logs_stdout': greenbone_diag_compose_logs.stdout_lines,
+              'compose_logs_stderr': greenbone_diag_compose_logs.stderr_lines,
+              'disk_rc': greenbone_diag_disk.rc,
+              'disk_stdout': greenbone_diag_disk.stdout_lines,
+              'disk_stderr': greenbone_diag_disk.stderr_lines
+            } | to_nice_json
+          }}
+      delegate_to: localhost
+      become: false

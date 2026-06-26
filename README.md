@@ -83,7 +83,8 @@ Use a firewall, VPN, or reverse proxy when exposing GSA.
 `greenbone_install_mode` defaults to `auto`:
 
 - Kali Linux defaults to native `gvm` packages.
-- Ubuntu, Debian, RHEL, AlmaLinux, Rocky Linux, Oracle Linux, and Alpine default to Docker mode for portability.
+- Ubuntu, Debian, RHEL, AlmaLinux, Oracle Linux, and Alpine default to Docker mode for portability.
+- Rocky Linux 9/10 standalone installs must set `greenbone_install_mode: docker` explicitly.
 
 You can force a mode:
 

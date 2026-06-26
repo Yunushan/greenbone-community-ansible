@@ -9,6 +9,13 @@ name: rocky-standalone-acceptance
         required: true
         default: ubuntu-latest
 
+permissions:
+  contents: read
+
+concurrency:
+  group: rocky-standalone-acceptance
+  cancel-in-progress: false
+
 jobs:
   rocky-standalone-acceptance:
     name: Rocky 9/10 standalone acceptance
@@ -19,6 +26,7 @@ jobs:
       ROCKY10_HOST: ${{ secrets.ROCKY10_HOST }}
       ROCKY_SSH_USER: ${{ secrets.ROCKY_SSH_USER }}
       ROCKY_SSH_PRIVATE_KEY: ${{ secrets.ROCKY_SSH_PRIVATE_KEY }}
+      ROCKY_BECOME_PASSWORD: ${{ secrets.ROCKY_BECOME_PASSWORD }}
       ROCKY_SSH_KNOWN_HOSTS: ${{ secrets.ROCKY_SSH_KNOWN_HOSTS }}
       ROCKY_SSH_PORT: ${{ vars.ROCKY_SSH_PORT || '22' }}
       ACCEPTANCE_INVENTORY: inventories/rocky-standalone/hosts.acceptance.yml
@@ -26,6 +34,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Clear previous Rocky local artifacts
+        run: |
+          rm -rf .secrets/rocky-standalone-evidence
+          rm -rf .secrets/rocky-standalone-diagnostics
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -46,6 +59,13 @@ jobs:
             echo "::error::ROCKY_SSH_PORT must be an integer between 1 and 65535"
             missing=1
           fi
+          if [ -n "${ROCKY9_HOST}" ] && [ "${ROCKY9_HOST}" = "${ROCKY10_HOST}" ]; then
+            echo "::error::ROCKY9_HOST and ROCKY10_HOST must be different hosts"
+            missing=1
+          fi
+          if [ -n "${ROCKY_BECOME_PASSWORD}" ]; then
+            echo "::add-mask::${ROCKY_BECOME_PASSWORD}"
+          fi
           exit "${missing}"
 
       - name: Install Ansible dependencies
@@ -63,44 +83,95 @@ jobs:
           if [ -n "${ROCKY_SSH_KNOWN_HOSTS}" ]; then
             printf '%s\n' "${ROCKY_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
           else
-            ssh-keyscan -p "${ROCKY_SSH_PORT}" -H "${ROCKY9_HOST}" "${ROCKY10_HOST}" > ~/.ssh/known_hosts
+            : > ~/.ssh/known_hosts
+            for host in "${ROCKY9_HOST}" "${ROCKY10_HOST}"; do
+              if ! host_keys="$(ssh-keyscan -T 10 -p "${ROCKY_SSH_PORT}" -H "${host}")" || [ -z "${host_keys}" ]; then
+                echo "::error::Failed to collect SSH host key for ${host}"
+                exit 1
+              fi
+              printf '%s\n' "${host_keys}" >> ~/.ssh/known_hosts
+            done
+          fi
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::SSH known_hosts is empty"
+            exit 1
+          fi
+          if ! ssh-keygen -l -f ~/.ssh/known_hosts > /dev/null; then
+            echo "::error::SSH known_hosts does not contain valid host keys"
+            exit 1
           fi
           chmod 600 ~/.ssh/known_hosts
 
       - name: Render acceptance inventory
         shell: bash
         run: |
-          cat > "${ACCEPTANCE_INVENTORY}" <<EOF
-          ---
-          all:
-            vars:
-              greenbone_install_mode: docker
-              greenbone_docker_use_official_repo: true
-              greenbone_web_bind_address: "127.0.0.1"
-              ansible_user: "${ROCKY_SSH_USER}"
-              ansible_port: ${ROCKY_SSH_PORT}
-              ansible_ssh_private_key_file: "${HOME}/.ssh/id_ed25519"
-            children:
-              greenbone_masters:
-                hosts:
-                  rocky9-standalone:
-                    ansible_host: "${ROCKY9_HOST}"
-                    greenbone_expected_rocky_major_version: 9
-                  rocky10-standalone:
-                    ansible_host: "${ROCKY10_HOST}"
-                    greenbone_expected_rocky_major_version: 10
-              greenbone_workers:
-                hosts: {}
-          EOF
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+
+          def scalar(value):
+              return json.dumps(value)
+
+
+          inventory_vars = [
+              ("greenbone_install_mode", scalar("docker")),
+              ("greenbone_docker_use_official_repo", "true"),
+              ("greenbone_web_bind_address", scalar("127.0.0.1")),
+              ("ansible_user", scalar(os.environ["ROCKY_SSH_USER"])),
+              ("ansible_port", str(int(os.environ["ROCKY_SSH_PORT"]))),
+              ("ansible_ssh_private_key_file", scalar(f"{os.environ['HOME']}/.ssh/id_ed25519")),
+              (
+                  "ansible_ssh_common_args",
+                  scalar(
+                      "-o StrictHostKeyChecking=yes "
+                      f"-o UserKnownHostsFile={os.environ['HOME']}/.ssh/known_hosts"
+                  ),
+              ),
+          ]
+          if os.environ.get("ROCKY_BECOME_PASSWORD"):
+              inventory_vars.append(
+                  ("ansible_become_password", scalar(os.environ["ROCKY_BECOME_PASSWORD"]))
+              )
+
+          lines = ["---", "all:", "  vars:"]
+          lines.extend(f"    {name}: {value}" for name, value in inventory_vars)
+          lines.extend(
+              [
+                  "  children:",
+                  "    greenbone_masters:",
+                  "      hosts:",
+                  "        rocky9-standalone:",
+                  f"          ansible_host: {scalar(os.environ['ROCKY9_HOST'])}",
+                  "          greenbone_expected_rocky_major_version: 9",
+                  "        rocky10-standalone:",
+                  f"          ansible_host: {scalar(os.environ['ROCKY10_HOST'])}",
+                  "          greenbone_expected_rocky_major_version: 10",
+                  "    greenbone_workers:",
+                  "      hosts: {}",
+              ]
+          )
+
+          Path(os.environ["ACCEPTANCE_INVENTORY"]).write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8",
+          )
+          PY
 
       - name: Show acceptance inventory hosts
-        run: ansible-inventory -i "${ACCEPTANCE_INVENTORY}" --list
+        run: ansible-inventory -i "${ACCEPTANCE_INVENTORY}" --graph
 
       - name: Verify Rocky SSH and sudo access
-        run: ansible greenbone_masters -i "${ACCEPTANCE_INVENTORY}" -m ansible.builtin.ping --become
+        run: >-
+          ansible greenbone_masters
+          -i "${ACCEPTANCE_INVENTORY}"
+          -m ansible.builtin.raw
+          -a 'id -u && test -r /etc/os-release'
+          --become
 
-      - name: Clear previous Rocky acceptance evidence
-        run: rm -rf .secrets/rocky-standalone-evidence
+      - name: Run Rocky standalone preflight
+        run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" playbooks/preflight-rocky-standalone.yml
 
       - name: Install Greenbone on Rocky standalone hosts
         run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" site.yml
@@ -110,6 +181,19 @@ jobs:
 
       - name: Validate Rocky acceptance evidence
         run: python3 scripts/dev/Test-RockyAcceptanceEvidence.py
+
+      - name: Collect Rocky diagnostics on failure
+        if: failure()
+        continue-on-error: true
+        run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" playbooks/collect-rocky-standalone-diagnostics.yml
+
+      - name: Upload Rocky diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rocky-standalone-diagnostics
+          path: .secrets/rocky-standalone-diagnostics/*.json
+          if-no-files-found: warn
 
       - name: Upload Rocky acceptance evidence
         if: always()

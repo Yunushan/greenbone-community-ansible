@@ -1,0 +1,164 @@
+---
+- import_playbook: bootstrap-rocky-standalone.yml
+
+- name: Preflight Rocky Linux standalone Docker targets
+  hosts: greenbone_masters
+  become: true
+  gather_facts: true
+  vars:
+    greenbone_preflight_supported_architectures: "{{ greenbone_rocky_docker_supported_architectures | default(['x86_64', 'aarch64']) }}"
+    greenbone_preflight_min_cpu_cores: "{{ greenbone_rocky_preflight_min_cpu_cores | default(4) }}"
+    greenbone_preflight_min_memory_mb: "{{ greenbone_rocky_preflight_min_memory_mb | default(8192) }}"
+    greenbone_preflight_min_disk_mb: "{{ greenbone_rocky_preflight_min_disk_mb | default(61440) }}"
+    greenbone_preflight_rocky10_min_ansible_core_version: "{{ greenbone_rocky10_min_ansible_core_version | default('2.19.0') }}"
+    greenbone_preflight_default_disk_check_path: >-
+      {{ (greenbone_work_dir | default('/opt/greenbone-community')) | dirname }}
+    greenbone_preflight_disk_check_path: >-
+      {{
+        greenbone_rocky_preflight_disk_check_path
+        | default(greenbone_preflight_default_disk_check_path)
+      }}
+    greenbone_preflight_default_docker_rpm_packages:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    greenbone_preflight_docker_rpm_packages: >-
+      {{
+        greenbone_docker_rpm_packages
+        | default(greenbone_preflight_default_docker_rpm_packages)
+      }}
+    greenbone_preflight_required_urls:
+      - url: https://download.docker.com/linux/centos/docker-ce.repo
+        status_code:
+          - 200
+      - url: https://download.docker.com/linux/centos/gpg
+        status_code:
+          - 200
+      - url: https://greenbone.github.io/docs/latest/_static/compose.yaml
+        status_code:
+          - 200
+      - url: https://registry.community.greenbone.net/v2/
+        status_code:
+          - 200
+          - 401
+  tasks:
+    - name: Assert target is a supported Rocky Linux standalone Docker host
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution | lower | regex_replace('[^a-z0-9]', '') in ['rocky', 'rockylinux']
+          - ansible_distribution_major_version | int in [9, 10]
+          - ansible_architecture in greenbone_preflight_supported_architectures
+          - greenbone_install_mode == 'docker'
+          - greenbone_docker_use_official_repo | default(true) | bool
+          - >-
+            greenbone_expected_rocky_major_version is not defined or
+            ansible_distribution_major_version | int == greenbone_expected_rocky_major_version | int
+        fail_msg: >-
+          Rocky standalone preflight requires Rocky Linux 9 or 10 on x86_64 or
+          aarch64, greenbone_install_mode=docker,
+          greenbone_docker_use_official_repo=true, and the expected Rocky major
+          version to match the inventory host.
+
+    - name: Assert controller ansible-core supports Rocky Linux 10
+      ansible.builtin.assert:
+        that:
+          - >-
+            ansible_distribution_major_version | int != 10 or
+            ansible_version.full is version(greenbone_preflight_rocky10_min_ansible_core_version, '>=')
+        fail_msg: >-
+          Rocky Linux 10 preflight requires ansible-core
+          {{ greenbone_preflight_rocky10_min_ansible_core_version }} or newer
+          on the controller so installation uses a tested Red Hat package backend.
+
+    - name: Assert Rocky Linux reports a supported package manager
+      ansible.builtin.assert:
+        that:
+          - ansible_pkg_mgr | default('unknown') in ['dnf', 'dnf5']
+        fail_msg: >-
+          Rocky Linux standalone preflight expects ansible_pkg_mgr to be dnf or
+          dnf5 so Ansible's Red Hat package tasks select a supported backend.
+          Gathered
+          ansible_pkg_mgr={{ ansible_pkg_mgr | default('unknown') }}.
+
+    - name: Record target Docker RPM metadata URL
+      ansible.builtin.set_fact:
+        greenbone_preflight_docker_rpm_packages_url: >-
+          https://download.docker.com/linux/centos/{{ ansible_distribution_major_version }}/{{ ansible_architecture }}/stable/Packages/
+
+    - name: Check available disk space for Greenbone work directory
+      ansible.builtin.command:
+        argv:
+          - df
+          - -Pm
+          - "{{ greenbone_preflight_disk_check_path }}"
+      register: greenbone_preflight_disk_check
+      changed_when: false
+
+    - name: Record available disk space for Greenbone work directory
+      ansible.builtin.set_fact:
+        greenbone_preflight_disk_mb_available: "{{ (greenbone_preflight_disk_check.stdout_lines[1].split())[3] }}"
+
+    - name: Assert target has minimum Greenbone container resources
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              ansible_processor_vcpus
+              | default(ansible_processor_nproc | default(0), true)
+              | int
+            ) >= (greenbone_preflight_min_cpu_cores | int)
+          - (ansible_memtotal_mb | int) >= (greenbone_preflight_min_memory_mb | int)
+          - >-
+            (greenbone_preflight_disk_mb_available | int) >=
+            (greenbone_preflight_min_disk_mb | int)
+        fail_msg: >-
+          Rocky standalone preflight requires at least
+          {{ greenbone_preflight_min_cpu_cores }} CPU cores,
+          {{ greenbone_preflight_min_memory_mb }} MB RAM, and
+          {{ greenbone_preflight_min_disk_mb }} MB free disk at
+          {{ greenbone_preflight_disk_check_path }}.
+
+    - name: Check target network access to required upstream endpoints
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        status_code: "{{ item.status_code }}"
+        validate_certs: true
+      loop: "{{ greenbone_preflight_required_urls }}"
+      changed_when: false
+
+    - name: Check Docker RPM metadata for target release and architecture
+      ansible.builtin.uri:
+        url: "{{ greenbone_preflight_docker_rpm_packages_url }}"
+        status_code:
+          - 200
+        return_content: true
+        validate_certs: true
+      register: greenbone_preflight_docker_rpm_metadata
+      changed_when: false
+
+    - name: Assert Docker RPM metadata publishes required packages
+      ansible.builtin.assert:
+        that:
+          - >-
+            greenbone_preflight_docker_rpm_metadata.content is search(
+              (item | regex_escape) ~ '-[0-9][^"]+\\.el' ~
+              (ansible_distribution_major_version | string) ~ '\\.' ~
+              ansible_architecture ~ '\\.rpm'
+            )
+        fail_msg: >-
+          Docker's CentOS RPM metadata at
+          {{ greenbone_preflight_docker_rpm_packages_url }} does not publish
+          {{ item }} for Rocky {{ ansible_distribution_major_version }} on
+          {{ ansible_architecture }}.
+      loop: "{{ greenbone_preflight_docker_rpm_packages }}"
+
+    - name: Show Rocky standalone preflight result
+      ansible.builtin.debug:
+        msg: >-
+          Rocky standalone preflight passed on {{ inventory_hostname }}
+          (Rocky {{ ansible_distribution_major_version }},
+          {{ ansible_architecture }},
+          {{ greenbone_preflight_disk_mb_available }} MB free at
+          {{ greenbone_preflight_disk_check_path }}).

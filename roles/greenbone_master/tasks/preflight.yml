@@ -19,7 +19,10 @@
   ansible.builtin.set_fact:
     greenbone_master_generated_admin_password_file: >-
       {{
-        (greenbone_controller_secret_dir | default(lookup('env', 'PWD') + '/.secrets'))
+        (
+          greenbone_controller_secret_dir
+          | default((lookup('env', 'PWD') | default('.', true)) + '/.secrets')
+        )
         + '/greenbone_admin_password'
       }}
 
@@ -41,6 +44,7 @@
         )
       }}
   no_log: true
+  throttle: 1
   when: greenbone_admin_password | default('') | length == 0
 
 - name: Assert Greenbone admin password is available
@@ -59,4 +63,5 @@
     mode: "0600"
   delegate_to: localhost
   become: false
+  throttle: 1
   when: greenbone_admin_password | default('') | length == 0

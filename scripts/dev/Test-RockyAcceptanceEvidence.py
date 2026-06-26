@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,16 +16,39 @@ DEFAULT_EXPECTED_HOSTS = {
     "rocky10-standalone": 10,
 }
 SUPPORTED_ARCHITECTURES = {"x86_64", "aarch64"}
+SUPPORTED_PACKAGE_MANAGERS = {"dnf", "dnf5"}
+SUPPORTED_ROCKY_DISTRIBUTION_NAMES = {"rocky", "rockylinux"}
 REQUIRED_RUNNING_SERVICES = {
     "gsa",
     "gsad",
     "gvmd",
     "nginx",
+    "openvas",
+    "openvasd",
     "ospd-openvas",
     "pg-gvm",
     "redis-server",
 }
+REQUIRED_DOCKER_RPM_PACKAGES = {
+    "docker-ce",
+    "docker-ce-cli",
+    "containerd.io",
+    "docker-buildx-plugin",
+    "docker-compose-plugin",
+}
+EXPECTED_DOCKER_RPM_GPG_FINGERPRINT = "060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35"
+EXPECTED_DOCKER_RPM_GPG_KEY_ID = "621e9f35"
+MINIMUM_ANSIBLE_CORE_VERSION_FOR_ROCKY10 = (2, 19, 0)
+MINIMUM_ANSIBLE_CORE_VERSION_FOR_ROCKY10_TEXT = "2.19.0"
+MINIMUM_CPU_CORES = 4
+MINIMUM_MEMORY_MB = 8192
+MINIMUM_DISK_MB = 61440
+MINIMUM_SERVICE_WAIT_SECONDS = 900
 ACCEPTED_WEB_STATUSES = {200, 301, 302}
+EXPECTED_DOCKER_RPM_REPO_FILE = "/etc/yum.repos.d/docker-ce.repo"
+EXPECTED_WEB_BIND_ADDRESS = "127.0.0.1"
+EXPECTED_WEB_HTTPS_PORT = 443
+EXPECTED_WEB_GSAD_PORT = 9392
 
 
 class EvidenceError(Exception):
@@ -42,6 +66,14 @@ def _as_string_list(value: object, field: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise EvidenceError(f"{field} must be a JSON array of strings.")
     return value
+
+
+def _version_tuple(value: object, field: str) -> tuple[int, int, int]:
+    value_text = str(value or "")
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", value_text)
+    if not match:
+        raise EvidenceError(f"{field} must look like a semantic version, got {value!r}.")
+    return tuple(int(part) for part in match.groups())
 
 
 def _load_report(evidence_dir: Path, host: str) -> dict[str, object]:
@@ -64,8 +96,11 @@ def _validate_report(report: dict[str, object], host: str, expected_major: int) 
     if report.get("host") != host:
         raise EvidenceError(f"{host}: report host field is {report.get('host')!r}.")
 
-    distribution = str(report.get("distribution", "")).lower()
-    if distribution != "rocky":
+    if not report.get("validated_at"):
+        raise EvidenceError(f"{host}: missing evidence field validated_at.")
+
+    distribution = re.sub(r"[^a-z0-9]", "", str(report.get("distribution", "")).lower())
+    if distribution not in SUPPORTED_ROCKY_DISTRIBUTION_NAMES:
         raise EvidenceError(f"{host}: distribution must be Rocky, got {report.get('distribution')!r}.")
 
     actual_major = _as_int(report.get("distribution_major_version"), f"{host}: distribution_major_version")
@@ -85,10 +120,111 @@ def _validate_report(report: dict[str, object], host: str, expected_major: int) 
     architecture = report.get("architecture")
     if architecture not in SUPPORTED_ARCHITECTURES:
         raise EvidenceError(f"{host}: unsupported architecture in evidence: {architecture!r}.")
+    if report.get("os_family") != "RedHat":
+        raise EvidenceError(f"{host}: os_family must be RedHat, got {report.get('os_family')!r}.")
+    if not report.get("kernel"):
+        raise EvidenceError(f"{host}: missing evidence field kernel.")
+    package_manager = report.get("package_manager")
+    if package_manager not in SUPPORTED_PACKAGE_MANAGERS:
+        raise EvidenceError(
+            f"{host}: package_manager must be one of "
+            f"{', '.join(sorted(SUPPORTED_PACKAGE_MANAGERS))}, got {package_manager!r}."
+        )
+    if package_manager == "dnf5":
+        if report.get("dnf5_backend_checked") is not True:
+            raise EvidenceError(f"{host}: DNF5 backend runtime check must be recorded.")
+        if report.get("python3_libdnf5_installed") is not True:
+            raise EvidenceError(f"{host}: python3-libdnf5 must be installed for DNF5 targets.")
+
+    ansible_core_version = _version_tuple(report.get("ansible_core_version"), f"{host}: ansible_core_version")
+    if actual_major == 10 and ansible_core_version < MINIMUM_ANSIBLE_CORE_VERSION_FOR_ROCKY10:
+        minimum = ".".join(str(part) for part in MINIMUM_ANSIBLE_CORE_VERSION_FOR_ROCKY10)
+        raise EvidenceError(
+            f"{host}: ansible_core_version must be at least {minimum} for Rocky Linux 10."
+        )
+    if report.get("minimum_ansible_core_version_for_rocky10") != MINIMUM_ANSIBLE_CORE_VERSION_FOR_ROCKY10_TEXT:
+        raise EvidenceError(
+            f"{host}: minimum_ansible_core_version_for_rocky10 must be "
+            f"{MINIMUM_ANSIBLE_CORE_VERSION_FOR_ROCKY10_TEXT}."
+        )
+
+    if report.get("install_mode") != "docker":
+        raise EvidenceError(f"{host}: install_mode must be docker, got {report.get('install_mode')!r}.")
+    if report.get("official_docker_repo_enabled") is not True:
+        raise EvidenceError(f"{host}: official_docker_repo_enabled must be true.")
+
+    minimum_cpu_cores = _as_int(report.get("minimum_cpu_cores"), f"{host}: minimum_cpu_cores")
+    if minimum_cpu_cores < MINIMUM_CPU_CORES:
+        raise EvidenceError(f"{host}: minimum_cpu_cores must be at least {MINIMUM_CPU_CORES}.")
+    cpu_cores = _as_int(report.get("cpu_cores"), f"{host}: cpu_cores")
+    if cpu_cores < minimum_cpu_cores:
+        raise EvidenceError(f"{host}: CPU cores {cpu_cores} below required {minimum_cpu_cores}.")
+
+    minimum_memory_mb = _as_int(report.get("minimum_memory_mb"), f"{host}: minimum_memory_mb")
+    if minimum_memory_mb < MINIMUM_MEMORY_MB:
+        raise EvidenceError(f"{host}: minimum_memory_mb must be at least {MINIMUM_MEMORY_MB}.")
+    memory_mb = _as_int(report.get("memory_mb"), f"{host}: memory_mb")
+    if memory_mb < minimum_memory_mb:
+        raise EvidenceError(f"{host}: memory {memory_mb} MB below required {minimum_memory_mb} MB.")
+
+    minimum_disk_mb = _as_int(report.get("minimum_disk_mb"), f"{host}: minimum_disk_mb")
+    if minimum_disk_mb < MINIMUM_DISK_MB:
+        raise EvidenceError(f"{host}: minimum_disk_mb must be at least {MINIMUM_DISK_MB}.")
+    disk_mb_available = _as_int(report.get("disk_mb_available"), f"{host}: disk_mb_available")
+    if disk_mb_available < minimum_disk_mb:
+        raise EvidenceError(
+            f"{host}: free disk {disk_mb_available} MB below required {minimum_disk_mb} MB."
+        )
+    if not report.get("disk_check_path"):
+        raise EvidenceError(f"{host}: missing evidence field disk_check_path.")
+
+    if report.get("docker_rpm_repo_file") != EXPECTED_DOCKER_RPM_REPO_FILE:
+        raise EvidenceError(
+            f"{host}: Docker RPM repository file must be {EXPECTED_DOCKER_RPM_REPO_FILE}, "
+            f"got {report.get('docker_rpm_repo_file')!r}."
+        )
+    if report.get("docker_rpm_repo_file_exists") is not True:
+        raise EvidenceError(f"{host}: Docker RPM repository file was not found.")
+    if report.get("docker_rpm_repo_uses_docker_centos_repo") is not True:
+        raise EvidenceError(f"{host}: Docker RPM repository must use Docker's CentOS repo.")
+    if report.get("docker_rpm_repo_gpgcheck_enabled") is not True:
+        raise EvidenceError(f"{host}: Docker RPM repository must have gpgcheck=1.")
+    if report.get("docker_rpm_repo_gpgkey_url_present") is not True:
+        raise EvidenceError(f"{host}: Docker RPM repository must use Docker's CentOS RPM GPG key.")
+    if report.get("docker_rpm_gpg_key_fingerprint") != EXPECTED_DOCKER_RPM_GPG_FINGERPRINT:
+        raise EvidenceError(
+            f"{host}: Docker RPM GPG key fingerprint must be {EXPECTED_DOCKER_RPM_GPG_FINGERPRINT}."
+        )
+    if str(report.get("docker_rpm_gpg_key_id", "")).lower() != EXPECTED_DOCKER_RPM_GPG_KEY_ID:
+        raise EvidenceError(f"{host}: Docker RPM GPG key ID must be {EXPECTED_DOCKER_RPM_GPG_KEY_ID}.")
+    if report.get("docker_rpm_gpg_key_imported") is not True:
+        raise EvidenceError(f"{host}: Docker RPM GPG key must be imported in the RPM database.")
+
+    docker_rpm_packages = _as_string_list(report.get("docker_rpm_packages"), f"{host}: docker_rpm_packages")
+    missing_rpm_packages = sorted(REQUIRED_DOCKER_RPM_PACKAGES - set(docker_rpm_packages))
+    if missing_rpm_packages:
+        raise EvidenceError(f"{host}: missing Docker RPM packages: {', '.join(missing_rpm_packages)}.")
 
     compose_ps = _as_string_list(report.get("compose_ps"), f"{host}: compose_ps")
     if not compose_ps:
         raise EvidenceError(f"{host}: compose_ps evidence must not be empty.")
+    if report.get("compose_ps_collected_after_service_wait") is not True:
+        raise EvidenceError(f"{host}: compose_ps must be collected after the service wait gate.")
+    service_wait_retries = _as_int(report.get("service_wait_retries"), f"{host}: service_wait_retries")
+    service_wait_delay_seconds = _as_int(
+        report.get("service_wait_delay_seconds"),
+        f"{host}: service_wait_delay_seconds",
+    )
+    service_wait_timeout_seconds = _as_int(
+        report.get("service_wait_timeout_seconds"),
+        f"{host}: service_wait_timeout_seconds",
+    )
+    if service_wait_timeout_seconds != service_wait_retries * service_wait_delay_seconds:
+        raise EvidenceError(f"{host}: service_wait_timeout_seconds does not match retries times delay.")
+    if service_wait_timeout_seconds < MINIMUM_SERVICE_WAIT_SECONDS:
+        raise EvidenceError(
+            f"{host}: service wait timeout must be at least {MINIMUM_SERVICE_WAIT_SECONDS} seconds."
+        )
 
     running_services = set(_as_string_list(report.get("running_services"), f"{host}: running_services"))
     missing_services = sorted(REQUIRED_RUNNING_SERVICES - running_services)
@@ -98,25 +234,60 @@ def _validate_report(report: dict[str, object], host: str, expected_major: int) 
     web_status = _as_int(report.get("web_probe_status"), f"{host}: web_probe_status")
     if web_status not in ACCEPTED_WEB_STATUSES:
         raise EvidenceError(f"{host}: unexpected web probe status {web_status}.")
+    gsad_web_status = _as_int(
+        report.get("web_gsad_probe_status"),
+        f"{host}: web_gsad_probe_status",
+    )
+    if gsad_web_status not in ACCEPTED_WEB_STATUSES:
+        raise EvidenceError(f"{host}: unexpected GSAD web probe status {gsad_web_status}.")
+    if report.get("web_bind_address") != EXPECTED_WEB_BIND_ADDRESS:
+        raise EvidenceError(
+            f"{host}: web_bind_address must be {EXPECTED_WEB_BIND_ADDRESS}, "
+            f"got {report.get('web_bind_address')!r}."
+        )
+    web_https_port = _as_int(report.get("web_https_port"), f"{host}: web_https_port")
+    if web_https_port != EXPECTED_WEB_HTTPS_PORT:
+        raise EvidenceError(
+            f"{host}: web_https_port must be {EXPECTED_WEB_HTTPS_PORT}, got {web_https_port}."
+        )
+    web_gsad_port = _as_int(report.get("web_gsad_port"), f"{host}: web_gsad_port")
+    if web_gsad_port != EXPECTED_WEB_GSAD_PORT:
+        raise EvidenceError(
+            f"{host}: web_gsad_port must be {EXPECTED_WEB_GSAD_PORT}, got {web_gsad_port}."
+        )
+    if report.get("web_https_mapping_present") is not True:
+        raise EvidenceError(f"{host}: compose file must contain the expected HTTPS web mapping.")
+    if report.get("web_gsad_mapping_present") is not True:
+        raise EvidenceError(f"{host}: compose file must contain the expected GSAD web mapping.")
 
     for field in ("docker_version", "docker_compose_version", "compose_file"):
         if not report.get(field):
             raise EvidenceError(f"{host}: missing evidence field {field}.")
+    docker_version = str(report.get("docker_version"))
+    if not docker_version.startswith("Docker version "):
+        raise EvidenceError(f"{host}: docker_version does not look like Docker Engine output.")
+    docker_compose_version = str(report.get("docker_compose_version"))
+    if "Docker Compose version" not in docker_compose_version:
+        raise EvidenceError(f"{host}: docker_compose_version does not look like Docker Compose output.")
+    compose_file = str(report.get("compose_file"))
+    if not compose_file.endswith("/compose.yaml"):
+        raise EvidenceError(f"{host}: compose_file must point to a compose.yaml file.")
 
-    if report.get("admin_password_file_checked") is True:
-        if report.get("admin_password_file_exists") is not True:
-            raise EvidenceError(f"{host}: generated admin password file was not found.")
-        admin_password_file_size = _as_int(
-            report.get("admin_password_file_size"),
-            f"{host}: admin_password_file_size",
+    if report.get("admin_password_file_checked") is not True:
+        raise EvidenceError(f"{host}: generated admin password file must be checked in acceptance evidence.")
+    if report.get("admin_password_file_exists") is not True:
+        raise EvidenceError(f"{host}: generated admin password file was not found.")
+    admin_password_file_size = _as_int(
+        report.get("admin_password_file_size"),
+        f"{host}: admin_password_file_size",
+    )
+    if admin_password_file_size <= 0:
+        raise EvidenceError(f"{host}: generated admin password file is empty.")
+    if report.get("admin_password_file_mode") != "0600":
+        raise EvidenceError(
+            f"{host}: generated admin password file mode must be 0600, "
+            f"got {report.get('admin_password_file_mode')!r}."
         )
-        if admin_password_file_size <= 0:
-            raise EvidenceError(f"{host}: generated admin password file is empty.")
-        if report.get("admin_password_file_mode") != "0600":
-            raise EvidenceError(
-                f"{host}: generated admin password file mode must be 0600, "
-                f"got {report.get('admin_password_file_mode')!r}."
-            )
 
 
 def validate_evidence(evidence_dir: Path, expected_hosts: dict[str, int]) -> None:
@@ -137,11 +308,43 @@ def validate_evidence(evidence_dir: Path, expected_hosts: dict[str, int]) -> Non
 def _write_sample_report(path: Path, host: str, major: int) -> None:
     report = {
         "host": host,
+        "validated_at": "2026-06-26T12:00:00Z",
         "distribution": "Rocky",
         "distribution_version": f"{major}.0",
         "distribution_major_version": str(major),
         "architecture": "x86_64",
+        "os_family": "RedHat",
+        "kernel": "6.12.0-55.el10.x86_64",
+        "package_manager": "dnf",
+        "dnf5_backend_checked": False,
+        "python3_libdnf5_installed": False,
+        "ansible_core_version": "2.21.1",
+        "minimum_ansible_core_version_for_rocky10": "2.19.0",
         "expected_distribution_major_version": major,
+        "install_mode": "docker",
+        "official_docker_repo_enabled": True,
+        "cpu_cores": MINIMUM_CPU_CORES,
+        "minimum_cpu_cores": MINIMUM_CPU_CORES,
+        "memory_mb": MINIMUM_MEMORY_MB,
+        "minimum_memory_mb": MINIMUM_MEMORY_MB,
+        "disk_check_path": "/opt",
+        "disk_mb_available": MINIMUM_DISK_MB,
+        "minimum_disk_mb": MINIMUM_DISK_MB,
+        "docker_rpm_repo_file": "/etc/yum.repos.d/docker-ce.repo",
+        "docker_rpm_repo_file_exists": True,
+        "docker_rpm_repo_uses_docker_centos_repo": True,
+        "docker_rpm_repo_gpgcheck_enabled": True,
+        "docker_rpm_repo_gpgkey_url_present": True,
+        "docker_rpm_gpg_key_fingerprint": EXPECTED_DOCKER_RPM_GPG_FINGERPRINT,
+        "docker_rpm_gpg_key_id": EXPECTED_DOCKER_RPM_GPG_KEY_ID,
+        "docker_rpm_gpg_key_imported": True,
+        "docker_rpm_packages": [
+            "containerd.io",
+            "docker-buildx-plugin",
+            "docker-ce",
+            "docker-ce-cli",
+            "docker-compose-plugin",
+        ],
         "docker_version": "Docker version 28.0.0",
         "docker_compose_version": "Docker Compose version v2.35.0",
         "admin_password_file_checked": True,
@@ -150,11 +353,31 @@ def _write_sample_report(path: Path, host: str, major: int) -> None:
         "admin_password_file_size": 32,
         "admin_password_file_mode": "0600",
         "compose_file": "/opt/greenbone-community/compose.yaml",
+        "compose_ps_collected_after_service_wait": True,
+        "service_wait_retries": 60,
+        "service_wait_delay_seconds": 15,
+        "service_wait_timeout_seconds": MINIMUM_SERVICE_WAIT_SECONDS,
         "compose_ps": sorted(REQUIRED_RUNNING_SERVICES),
         "running_services": sorted(REQUIRED_RUNNING_SERVICES),
+        "web_bind_address": EXPECTED_WEB_BIND_ADDRESS,
+        "web_https_port": EXPECTED_WEB_HTTPS_PORT,
+        "web_gsad_port": EXPECTED_WEB_GSAD_PORT,
+        "web_https_mapping_present": True,
+        "web_gsad_mapping_present": True,
         "web_probe_status": 200,
+        "web_gsad_probe_status": 200,
     }
     path.write_text(json.dumps(report), encoding="utf-8")
+
+
+def _expect_evidence_error(evidence_dir: Path, expected_message: str) -> None:
+    try:
+        validate_evidence(evidence_dir, DEFAULT_EXPECTED_HOSTS)
+    except EvidenceError as exc:
+        if expected_message not in str(exc):
+            raise
+    else:
+        raise EvidenceError(f"Self-test did not reject evidence with {expected_message}.")
 
 
 def run_self_test() -> None:
@@ -166,13 +389,353 @@ def run_self_test() -> None:
 
         extra_report = evidence_dir / "stale-rocky.json"
         _write_sample_report(extra_report, "stale-rocky", 9)
-        try:
-            validate_evidence(evidence_dir, DEFAULT_EXPECTED_HOSTS)
-        except EvidenceError as exc:
-            if "Unexpected evidence report files" not in str(exc):
-                raise
-        else:
-            raise EvidenceError("Self-test did not reject unexpected evidence report files.")
+        _expect_evidence_error(evidence_dir, "Unexpected evidence report files")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        rocky10_report_path = evidence_dir / "rocky10-standalone.json"
+        rocky10_report = json.loads(rocky10_report_path.read_text(encoding="utf-8"))
+        rocky10_report["distribution"] = "Rocky Linux"
+        rocky10_report_path.write_text(json.dumps(rocky10_report), encoding="utf-8")
+        validate_evidence(evidence_dir, DEFAULT_EXPECTED_HOSTS)
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        rocky10_report_path = evidence_dir / "rocky10-standalone.json"
+        rocky10_report = json.loads(rocky10_report_path.read_text(encoding="utf-8"))
+        rocky10_report["package_manager"] = "dnf5"
+        rocky10_report["dnf5_backend_checked"] = True
+        rocky10_report["python3_libdnf5_installed"] = True
+        rocky10_report_path.write_text(json.dumps(rocky10_report), encoding="utf-8")
+        validate_evidence(evidence_dir, DEFAULT_EXPECTED_HOSTS)
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["package_manager"] = "yum"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "package_manager must be one of")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky10-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["package_manager"] = "dnf5"
+        broken_report["python3_libdnf5_installed"] = True
+        broken_report["dnf5_backend_checked"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "DNF5 backend runtime check must be recorded")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky10-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["package_manager"] = "dnf5"
+        broken_report["dnf5_backend_checked"] = True
+        broken_report["python3_libdnf5_installed"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "python3-libdnf5 must be installed")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky10-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["ansible_core_version"] = "2.18.9"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "ansible_core_version must be at least")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky10-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["minimum_ansible_core_version_for_rocky10"] = "2.18.0"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "minimum_ansible_core_version_for_rocky10 must be")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["install_mode"] = "auto"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "install_mode must be docker")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["official_docker_repo_enabled"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "official_docker_repo_enabled must be true")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_repo_file"] = "/etc/yum.repos.d/rocky-docker.repo"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "Docker RPM repository file must be")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_repo_uses_docker_centos_repo"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "Docker RPM repository must use Docker's CentOS repo")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_repo_gpgcheck_enabled"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "Docker RPM repository must have gpgcheck=1")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_repo_gpgkey_url_present"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "Docker RPM repository must use Docker's CentOS RPM GPG key")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_gpg_key_fingerprint"] = "bad"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "Docker RPM GPG key fingerprint must be")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_gpg_key_imported"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "Docker RPM GPG key must be imported")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_rpm_packages"] = [
+            package
+            for package in broken_report["docker_rpm_packages"]
+            if package != "docker-ce"
+        ]
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "missing Docker RPM packages: docker-ce")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["compose_ps_collected_after_service_wait"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "compose_ps must be collected after")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["service_wait_timeout_seconds"] = MINIMUM_SERVICE_WAIT_SECONDS - 1
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "service_wait_timeout_seconds does not match")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["service_wait_retries"] = 30
+        broken_report["service_wait_delay_seconds"] = 10
+        broken_report["service_wait_timeout_seconds"] = 300
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "service wait timeout must be at least")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["running_services"] = [
+            service
+            for service in broken_report["running_services"]
+            if service != "openvas"
+        ]
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "missing running services: openvas")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["web_bind_address"] = "0.0.0.0"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "web_bind_address must be 127.0.0.1")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["web_gsad_probe_status"] = 500
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "unexpected GSAD web probe status")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["web_https_port"] = 8443
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "web_https_port must be 443")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["web_gsad_port"] = 9443
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "web_gsad_port must be 9392")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["web_https_mapping_present"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "expected HTTPS web mapping")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["web_gsad_mapping_present"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "expected GSAD web mapping")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["cpu_cores"] = MINIMUM_CPU_CORES - 1
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "CPU cores")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["docker_version"] = "podman version 5.0.0"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "docker_version does not look like Docker Engine output")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["compose_file"] = "/opt/greenbone-community/docker-compose.yml"
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "compose_file must point to a compose.yaml file")
+
+    with TemporaryDirectory() as tmp:
+        evidence_dir = Path(tmp)
+        for host, major in DEFAULT_EXPECTED_HOSTS.items():
+            _write_sample_report(evidence_dir / f"{host}.json", host, major)
+
+        broken_report_path = evidence_dir / "rocky9-standalone.json"
+        broken_report = json.loads(broken_report_path.read_text(encoding="utf-8"))
+        broken_report["admin_password_file_checked"] = False
+        broken_report_path.write_text(json.dumps(broken_report), encoding="utf-8")
+        _expect_evidence_error(evidence_dir, "generated admin password file must be checked")
 
 
 def parse_args() -> argparse.Namespace:

@@ -12,7 +12,10 @@ Ubuntu, Debian, Kali Linux, RHEL, AlmaLinux, Rocky Linux 9/10, Oracle Linux, and
 
 ## Installation modes
 
-`greenbone_install_mode: auto` chooses native installation on Kali and Docker installation on other supported systems. You can force `docker` or `native`.
+`greenbone_install_mode: auto` chooses native installation on Kali and Docker
+installation on most other supported systems. Rocky Linux 9/10 standalone
+installs must set `greenbone_install_mode: docker` explicitly. You can force
+`docker` or `native`.
 
 ```yaml
 greenbone_install_mode: docker

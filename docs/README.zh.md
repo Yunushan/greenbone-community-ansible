@@ -12,7 +12,9 @@ Ubuntu、Debian、Kali Linux、RHEL、AlmaLinux、Rocky Linux 9/10、Oracle Linu
 
 ## 安装模式
 
-`greenbone_install_mode: auto` 会在 Kali 上使用原生 `gvm` 包，在其他支持的系统上使用 Docker。也可以强制指定：
+`greenbone_install_mode: auto` 会在 Kali 上使用原生 `gvm` 包，在大多数其他支持的系统上使用 Docker。
+Rocky Linux 9/10 standalone 安装必须显式设置 `greenbone_install_mode: docker`。
+也可以强制指定：
 
 ```yaml
 greenbone_install_mode: docker

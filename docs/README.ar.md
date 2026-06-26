@@ -12,7 +12,9 @@ Ubuntu و Debian و Kali Linux و RHEL و AlmaLinux و Rocky Linux 9/10 و Oracl
 
 ## أوضاع التثبيت
 
-القيمة `greenbone_install_mode: auto` تستخدم حزم `gvm` الأصلية على Kali، وتستخدم Docker على الأنظمة المدعومة الأخرى. يمكن فرض وضع محدد:
+القيمة `greenbone_install_mode: auto` تستخدم حزم `gvm` الأصلية على Kali، وتستخدم Docker على معظم الأنظمة المدعومة الأخرى.
+في تثبيت Rocky Linux 9/10 standalone يجب ضبط `greenbone_install_mode: docker` صراحةً.
+يمكن فرض وضع محدد:
 
 ```yaml
 greenbone_install_mode: docker

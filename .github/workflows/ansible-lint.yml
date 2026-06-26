@@ -5,6 +5,9 @@ name: ansible-lint
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ansible-lint:
     runs-on: ubuntu-latest
@@ -31,8 +34,11 @@ jobs:
 
       - name: Run Rocky standalone Ansible syntax validation
         run: |
+          ansible-playbook -i inventories/rocky-standalone/hosts.yml playbooks/bootstrap-rocky-standalone.yml --syntax-check
+          ansible-playbook -i inventories/rocky-standalone/hosts.yml playbooks/preflight-rocky-standalone.yml --syntax-check
           ansible-playbook -i inventories/rocky-standalone/hosts.yml site.yml --syntax-check
           ansible-playbook -i inventories/rocky-standalone/hosts.yml playbooks/validate-rocky-standalone.yml --syntax-check
+          ansible-playbook -i inventories/rocky-standalone/hosts.yml playbooks/collect-rocky-standalone-diagnostics.yml --syntax-check
           ansible-playbook -i inventories/rocky-standalone/hosts.yml site.yml --list-hosts
 
       - name: Run ansible-lint
@@ -47,7 +53,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Run Rocky Docker repository metadata validation
+      - name: Run Rocky RPM repository metadata validation
         run: python3 scripts/dev/Test-RockyDockerRepoMetadata.py
 
       - name: Run Greenbone container platform validation

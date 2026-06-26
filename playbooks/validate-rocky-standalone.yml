@@ -4,23 +4,52 @@
   become: true
   gather_facts: true
   vars:
+    greenbone_validate_default_secret_dir: "{{ (lookup('env', 'PWD') | default('.', true)) + '/.secrets' }}"
+    greenbone_validate_secret_dir: "{{ greenbone_controller_secret_dir | default(greenbone_validate_default_secret_dir) }}"
     greenbone_validate_work_dir: "{{ greenbone_work_dir | default('/opt/greenbone-community') }}"
-    greenbone_validate_web_https_port: "{{ greenbone_web_https_port | default(443) }}"
-    greenbone_validate_compose_file: "{{ greenbone_validate_work_dir }}/compose.yaml"
-    greenbone_validate_evidence_dir: "{{ lookup('env', 'PWD') + '/.secrets/rocky-standalone-evidence' }}"
-    greenbone_validate_admin_password_file: >-
+    greenbone_validate_min_cpu_cores: "{{ greenbone_rocky_preflight_min_cpu_cores | default(4) }}"
+    greenbone_validate_min_memory_mb: "{{ greenbone_rocky_preflight_min_memory_mb | default(8192) }}"
+    greenbone_validate_min_disk_mb: "{{ greenbone_rocky_preflight_min_disk_mb | default(61440) }}"
+    greenbone_validate_rocky10_min_ansible_core_version: "{{ greenbone_rocky10_min_ansible_core_version | default('2.19.0') }}"
+    greenbone_validate_default_disk_check_path: "{{ greenbone_validate_work_dir | dirname }}"
+    greenbone_validate_disk_check_path: >-
       {{
-        (greenbone_controller_secret_dir | default(lookup('env', 'PWD') + '/.secrets'))
-        + '/greenbone_admin_password'
+        greenbone_rocky_preflight_disk_check_path
+        | default(greenbone_validate_default_disk_check_path)
+      }}
+    greenbone_validate_web_bind_address: "{{ greenbone_web_bind_address | default('127.0.0.1') }}"
+    greenbone_validate_web_https_port: "{{ greenbone_web_https_port | default(443) }}"
+    greenbone_validate_web_gsad_port: "{{ greenbone_web_gsad_port | default(9392) }}"
+    greenbone_validate_compose_file: "{{ greenbone_validate_work_dir }}/compose.yaml"
+    greenbone_validate_evidence_dir: "{{ greenbone_validate_secret_dir }}/rocky-standalone-evidence"
+    greenbone_validate_admin_password_file: "{{ greenbone_validate_secret_dir }}/greenbone_admin_password"
+    greenbone_validate_docker_rpm_repo_file: /etc/yum.repos.d/docker-ce.repo
+    greenbone_validate_docker_rpm_repo_marker: https://download.docker.com/linux/centos
+    greenbone_validate_docker_rpm_repo_gpgcheck_marker: gpgcheck=1
+    greenbone_validate_docker_rpm_repo_gpgkey_marker: gpgkey=https://download.docker.com/linux/centos/gpg
+    greenbone_validate_docker_rpm_gpg_fingerprint: "{{ greenbone_docker_rpm_gpg_fingerprint | default('060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35') }}"
+    greenbone_validate_docker_rpm_gpg_key_id: "621e9f35"
+    greenbone_validate_default_docker_rpm_packages:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    greenbone_validate_docker_rpm_packages: >-
+      {{
+        greenbone_docker_rpm_packages
+        | default(greenbone_validate_default_docker_rpm_packages)
       }}
     greenbone_validate_supported_architectures: "{{ greenbone_rocky_docker_supported_architectures | default(['x86_64', 'aarch64']) }}"
-    greenbone_validate_service_retries: 30
-    greenbone_validate_service_delay: 10
+    greenbone_validate_service_retries: "{{ greenbone_rocky_validate_service_retries | default(60) }}"
+    greenbone_validate_service_delay: "{{ greenbone_rocky_validate_service_delay | default(15) }}"
     greenbone_validate_required_running_services:
       - gsa
       - gsad
       - gvmd
       - nginx
+      - openvas
+      - openvasd
       - ospd-openvas
       - pg-gvm
       - redis-server
@@ -28,13 +57,74 @@
     - name: Assert target is supported Rocky Linux
       ansible.builtin.assert:
         that:
-          - ansible_distribution | lower | regex_replace('[^a-z0-9]', '') == 'rocky'
+          - ansible_distribution | lower | regex_replace('[^a-z0-9]', '') in ['rocky', 'rockylinux']
           - ansible_distribution_major_version | int in [9, 10]
           - ansible_architecture in greenbone_validate_supported_architectures
+          - greenbone_install_mode == 'docker'
+          - greenbone_docker_use_official_repo | default(true) | bool
           - >-
             greenbone_expected_rocky_major_version is not defined or
             ansible_distribution_major_version | int == greenbone_expected_rocky_major_version | int
-        fail_msg: "This validation playbook supports Rocky Linux 9 and 10 on x86_64 or aarch64 only."
+        fail_msg: >-
+          This validation playbook supports Rocky Linux 9 and 10 on x86_64 or
+          aarch64 only, using greenbone_install_mode=docker and Docker's
+          official CentOS RPM repository.
+
+    - name: Assert controller ansible-core supports Rocky Linux 10
+      ansible.builtin.assert:
+        that:
+          - >-
+            ansible_distribution_major_version | int != 10 or
+            ansible_version.full is version(greenbone_validate_rocky10_min_ansible_core_version, '>=')
+        fail_msg: >-
+          Rocky Linux 10 validation requires ansible-core
+          {{ greenbone_validate_rocky10_min_ansible_core_version }} or newer on
+          the controller so Red Hat package-management evidence is trustworthy.
+
+    - name: Assert Rocky Linux reports a supported package manager
+      ansible.builtin.assert:
+        that:
+          - ansible_pkg_mgr | default('unknown') in ['dnf', 'dnf5']
+        fail_msg: >-
+          Rocky Linux validation expects ansible_pkg_mgr to be dnf or dnf5 so
+          the evidence proves Ansible selected a supported Red Hat package
+          backend. Gathered
+          ansible_pkg_mgr={{ ansible_pkg_mgr | default('unknown') }}.
+
+    - name: Check available disk space for Rocky validation evidence
+      ansible.builtin.command:
+        argv:
+          - df
+          - -Pm
+          - "{{ greenbone_validate_disk_check_path }}"
+      register: greenbone_validate_disk_check
+      changed_when: false
+
+    - name: Record Rocky validation resource facts
+      ansible.builtin.set_fact:
+        greenbone_validate_cpu_cores: >-
+          {{
+            ansible_processor_vcpus
+            | default(ansible_processor_nproc | default(0), true)
+            | int
+          }}
+        greenbone_validate_memory_mb: "{{ ansible_memtotal_mb | int }}"
+        greenbone_validate_disk_mb_available: "{{ (greenbone_validate_disk_check.stdout_lines[1].split())[3] | int }}"
+
+    - name: Assert target has minimum Greenbone container resources
+      ansible.builtin.assert:
+        that:
+          - (greenbone_validate_cpu_cores | int) >= (greenbone_validate_min_cpu_cores | int)
+          - (greenbone_validate_memory_mb | int) >= (greenbone_validate_min_memory_mb | int)
+          - >-
+            (greenbone_validate_disk_mb_available | int) >=
+            (greenbone_validate_min_disk_mb | int)
+        fail_msg: >-
+          Rocky validation requires at least
+          {{ greenbone_validate_min_cpu_cores }} CPU cores,
+          {{ greenbone_validate_min_memory_mb }} MB RAM, and
+          {{ greenbone_validate_min_disk_mb }} MB free disk at
+          {{ greenbone_validate_disk_check_path }}.
 
     - name: Check Docker service status
       ansible.builtin.service_facts:
@@ -45,6 +135,121 @@
           - "'docker.service' in ansible_facts.services"
           - ansible_facts.services['docker.service'].state == 'running'
         fail_msg: "Docker service is not running on the Rocky standalone host."
+
+    - name: Check Docker RPM repository file
+      ansible.builtin.stat:
+        path: "{{ greenbone_validate_docker_rpm_repo_file }}"
+      register: greenbone_validate_docker_rpm_repo_file_stat
+      when: greenbone_docker_use_official_repo | default(true) | bool
+
+    - name: Read Docker RPM repository file
+      ansible.builtin.slurp:
+        src: "{{ greenbone_validate_docker_rpm_repo_file }}"
+      register: greenbone_validate_docker_rpm_repo_file_content
+      when:
+        - greenbone_docker_use_official_repo | default(true) | bool
+        - greenbone_validate_docker_rpm_repo_file_stat.stat.exists
+        - greenbone_validate_docker_rpm_repo_file_stat.stat.isreg
+
+    - name: Assert Docker RPM repository is the supported CentOS repository
+      ansible.builtin.assert:
+        that:
+          - greenbone_validate_docker_rpm_repo_file_stat.stat.exists
+          - greenbone_validate_docker_rpm_repo_file_stat.stat.isreg
+          - >-
+            greenbone_validate_docker_rpm_repo_marker in
+            (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
+          - >-
+            greenbone_validate_docker_rpm_repo_gpgcheck_marker in
+            (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
+          - >-
+            greenbone_validate_docker_rpm_repo_gpgkey_marker in
+            (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
+        fail_msg: >-
+          Rocky standalone support requires Docker's CentOS RPM repository at
+          {{ greenbone_validate_docker_rpm_repo_file }} with GPG checking
+          enabled and Docker's CentOS RPM GPG key configured.
+      when: greenbone_docker_use_official_repo | default(true) | bool
+
+    - name: List imported RPM GPG keys
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -qa
+          - gpg-pubkey*
+      register: greenbone_validate_rpm_gpg_keys
+      changed_when: false
+      when: greenbone_docker_use_official_repo | default(true) | bool
+
+    - name: Assert Docker RPM GPG key is imported
+      ansible.builtin.assert:
+        that:
+          - >-
+            greenbone_validate_docker_rpm_gpg_key_id in
+            (greenbone_validate_rpm_gpg_keys.stdout | lower)
+        fail_msg: >-
+          Docker's RPM GPG key {{ greenbone_validate_docker_rpm_gpg_fingerprint }}
+          is not imported in the RPM database.
+      when: greenbone_docker_use_official_repo | default(true) | bool
+
+    - name: Check required Docker RPM packages
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - --queryformat
+          - '%{NAME}\n'
+          - "{{ item }}"
+      loop: "{{ greenbone_validate_docker_rpm_packages }}"
+      register: greenbone_validate_docker_rpm_package_results
+      changed_when: false
+      failed_when: false
+      when: greenbone_docker_use_official_repo | default(true) | bool
+
+    - name: Assert required Docker RPM packages are installed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              greenbone_validate_docker_rpm_package_results.results
+              | default([])
+              | selectattr('rc', 'ne', 0)
+              | list
+              | length
+            ) == 0
+        fail_msg: >-
+          Missing required Docker RPM packages:
+          {{
+            greenbone_validate_docker_rpm_package_results.results
+            | default([])
+            | selectattr('rc', 'ne', 0)
+            | map(attribute='item')
+            | list
+            | join(', ')
+          }}.
+      when: greenbone_docker_use_official_repo | default(true) | bool
+
+    - name: Check python3-libdnf5 package for DNF5 package-manager backend
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - --queryformat
+          - '%{NAME}\n'
+          - python3-libdnf5
+      register: greenbone_validate_python3_libdnf5_result
+      changed_when: false
+      failed_when: false
+      when: ansible_pkg_mgr | default('') == 'dnf5'
+
+    - name: Assert DNF5 package-manager backend runtime is installed
+      ansible.builtin.assert:
+        that:
+          - greenbone_validate_python3_libdnf5_result.rc == 0
+        fail_msg: >-
+          Rocky Linux hosts managed through DNF5 must have python3-libdnf5
+          installed so Ansible package tasks use the expected DNF5 backend.
+      when: ansible_pkg_mgr | default('') == 'dnf5'
 
     - name: Check Greenbone compose file exists
       ansible.builtin.stat:
@@ -58,6 +263,32 @@
           - greenbone_validate_compose_file_stat.stat.isreg
         fail_msg: "Greenbone compose file is missing at {{ greenbone_validate_compose_file }}."
 
+    - name: Read Greenbone compose file for web mapping validation
+      ansible.builtin.slurp:
+        src: "{{ greenbone_validate_compose_file }}"
+      register: greenbone_validate_compose_file_content
+
+    - name: Record expected Greenbone compose web mappings
+      ansible.builtin.set_fact:
+        greenbone_validate_compose_web_https_mapping: >-
+          {{ greenbone_validate_web_bind_address ~ ':' ~ (greenbone_validate_web_https_port | string) ~ ':443' }}
+        greenbone_validate_compose_web_gsad_mapping: >-
+          {{ greenbone_validate_web_bind_address ~ ':' ~ (greenbone_validate_web_gsad_port | string) ~ ':9392' }}
+
+    - name: Assert Greenbone compose web mappings are localhost-bound
+      ansible.builtin.assert:
+        that:
+          - >-
+            greenbone_validate_compose_web_https_mapping in
+            (greenbone_validate_compose_file_content.content | b64decode)
+          - >-
+            greenbone_validate_compose_web_gsad_mapping in
+            (greenbone_validate_compose_file_content.content | b64decode)
+        fail_msg: >-
+          Greenbone compose file does not contain the expected localhost web
+          mappings {{ greenbone_validate_compose_web_https_mapping }} and
+          {{ greenbone_validate_compose_web_gsad_mapping }}.
+
     - name: Validate Greenbone compose configuration
       ansible.builtin.command:
         argv:
@@ -66,17 +297,6 @@
           - -f
           - "{{ greenbone_validate_compose_file }}"
           - config
-      changed_when: false
-
-    - name: List Greenbone compose services
-      ansible.builtin.command:
-        argv:
-          - docker
-          - compose
-          - -f
-          - "{{ greenbone_validate_compose_file }}"
-          - ps
-      register: greenbone_validate_compose_ps
       changed_when: false
 
     - name: List running Greenbone compose services
@@ -98,6 +318,17 @@
         greenbone_validate_required_running_services
         | difference(greenbone_validate_running_services.stdout_lines)
         | length == 0
+
+    - name: List Greenbone compose services after readiness gate
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ greenbone_validate_compose_file }}"
+          - ps
+      register: greenbone_validate_compose_ps
+      changed_when: false
 
     - name: Check Docker version
       ansible.builtin.command:
@@ -172,6 +403,19 @@
       delay: 10
       until: greenbone_validate_web_probe is succeeded
 
+    - name: Probe local Greenbone GSAD endpoint
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ greenbone_validate_web_gsad_port }}"
+        validate_certs: false
+        status_code:
+          - 200
+          - 301
+          - 302
+      register: greenbone_validate_gsad_web_probe
+      retries: 6
+      delay: 10
+      until: greenbone_validate_gsad_web_probe is succeeded
+
     - name: Ensure local validation evidence directory exists
       ansible.builtin.file:
         path: "{{ greenbone_validate_evidence_dir }}"
@@ -188,11 +432,58 @@
           {{
             {
               'host': inventory_hostname,
+              'validated_at': ansible_date_time.iso8601,
               'distribution': ansible_distribution,
               'distribution_version': ansible_distribution_version,
               'distribution_major_version': ansible_distribution_major_version,
               'architecture': ansible_architecture,
+              'os_family': ansible_os_family,
+              'kernel': ansible_kernel | default('unknown'),
+              'package_manager': ansible_pkg_mgr | default('unknown'),
+              'dnf5_backend_checked': ansible_pkg_mgr | default('unknown') == 'dnf5',
+              'python3_libdnf5_installed': (
+                ansible_pkg_mgr | default('unknown') == 'dnf5' and
+                greenbone_validate_python3_libdnf5_result.rc | default(1) == 0
+              ),
+              'ansible_core_version': ansible_version.full,
+              'minimum_ansible_core_version_for_rocky10': greenbone_validate_rocky10_min_ansible_core_version,
               'expected_distribution_major_version': greenbone_expected_rocky_major_version | default('unset'),
+              'install_mode': greenbone_install_mode,
+              'official_docker_repo_enabled': greenbone_docker_use_official_repo | default(true) | bool,
+              'cpu_cores': greenbone_validate_cpu_cores | int,
+              'minimum_cpu_cores': greenbone_validate_min_cpu_cores | int,
+              'memory_mb': greenbone_validate_memory_mb | int,
+              'minimum_memory_mb': greenbone_validate_min_memory_mb | int,
+              'disk_check_path': greenbone_validate_disk_check_path,
+              'disk_mb_available': greenbone_validate_disk_mb_available | int,
+              'minimum_disk_mb': greenbone_validate_min_disk_mb | int,
+              'docker_rpm_repo_file': greenbone_validate_docker_rpm_repo_file,
+              'docker_rpm_repo_file_exists': greenbone_validate_docker_rpm_repo_file_stat.stat.exists | default(false),
+              'docker_rpm_repo_uses_docker_centos_repo': (
+                greenbone_validate_docker_rpm_repo_marker in
+                (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
+              ),
+              'docker_rpm_repo_gpgcheck_enabled': (
+                greenbone_validate_docker_rpm_repo_gpgcheck_marker in
+                (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
+              ),
+              'docker_rpm_repo_gpgkey_url_present': (
+                greenbone_validate_docker_rpm_repo_gpgkey_marker in
+                (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
+              ),
+              'docker_rpm_gpg_key_fingerprint': greenbone_validate_docker_rpm_gpg_fingerprint,
+              'docker_rpm_gpg_key_id': greenbone_validate_docker_rpm_gpg_key_id,
+              'docker_rpm_gpg_key_imported': (
+                greenbone_validate_docker_rpm_gpg_key_id in
+                (greenbone_validate_rpm_gpg_keys.stdout | default('') | lower)
+              ),
+              'docker_rpm_packages': (
+                greenbone_validate_docker_rpm_package_results.results
+                | default([])
+                | map(attribute='stdout')
+                | map('trim')
+                | list
+              ),
               'docker_version': greenbone_validate_docker_version.stdout,
               'docker_compose_version': greenbone_validate_compose_version.stdout,
               'admin_password_file_checked': greenbone_admin_password | default('') | length == 0,
@@ -201,9 +492,28 @@
               'admin_password_file_size': greenbone_validate_admin_password_file_stat.stat.size | default(0),
               'admin_password_file_mode': greenbone_validate_admin_password_file_stat.stat.mode | default('unchecked'),
               'compose_file': greenbone_validate_compose_file,
+              'compose_ps_collected_after_service_wait': true,
+              'service_wait_retries': greenbone_validate_service_retries | int,
+              'service_wait_delay_seconds': greenbone_validate_service_delay | int,
+              'service_wait_timeout_seconds': (
+                (greenbone_validate_service_retries | int) *
+                (greenbone_validate_service_delay | int)
+              ),
               'compose_ps': greenbone_validate_compose_ps.stdout_lines,
               'running_services': greenbone_validate_running_services.stdout_lines,
-              'web_probe_status': greenbone_validate_web_probe.status | default('unknown')
+              'web_bind_address': greenbone_validate_web_bind_address,
+              'web_https_port': greenbone_validate_web_https_port | int,
+              'web_gsad_port': greenbone_validate_web_gsad_port | int,
+              'web_https_mapping_present': (
+                greenbone_validate_compose_web_https_mapping in
+                (greenbone_validate_compose_file_content.content | b64decode)
+              ),
+              'web_gsad_mapping_present': (
+                greenbone_validate_compose_web_gsad_mapping in
+                (greenbone_validate_compose_file_content.content | b64decode)
+              ),
+              'web_probe_status': greenbone_validate_web_probe.status | default('unknown'),
+              'web_gsad_probe_status': greenbone_validate_gsad_web_probe.status | default('unknown')
             } | to_nice_json
           }}
       delegate_to: localhost
