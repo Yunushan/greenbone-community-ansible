@@ -83,11 +83,22 @@
     update_cache: true
   when: ansible_os_family == 'Debian'
 
+- name: Check whether curl-minimal is installed on RedHat family
+  ansible.builtin.command:
+    argv:
+      - rpm
+      - -q
+      - curl-minimal
+  register: greenbone_common_curl_minimal_result
+  changed_when: false
+  failed_when: false
+  when: ansible_os_family == 'RedHat'
+
 - name: Install common prerequisites on RedHat family
   ansible.builtin.dnf:
     name:
       - ca-certificates
-      - curl
+      - "{{ 'curl-minimal' if greenbone_common_curl_minimal_result.rc | default(1) == 0 else 'curl' }}"
       - gnupg2
       - python3
     state: present

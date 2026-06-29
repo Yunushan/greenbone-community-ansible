@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import gzip
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
+import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -29,12 +32,29 @@ ROCKY_PREREQUISITE_PACKAGES = (
 ROCKY_REPOSITORIES = ("BaseOS", "AppStream")
 
 RPM_ARCHITECTURES = ("x86_64", "aarch64")
+REQUIRED_CONTAINER_PLATFORMS = {
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+}
+ROCKY_SMOKE_IMAGES = (
+    "quay.io/rockylinux/rockylinux:9",
+    "quay.io/rockylinux/rockylinux:10",
+)
 GPG_KEY_URL = "https://download.docker.com/linux/centos/gpg"
 ROCKY_REPO_URL_TEMPLATE = "https://dl.rockylinux.org/pub/rocky/{releasever}/{repo}/{architecture}/os/"
+MANIFEST_ACCEPT = ", ".join(
+    (
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+    )
+)
 
 
-def read_url(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=60) as response:
+def read_url(url: str, headers: dict[str, str] | None = None) -> bytes:
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
 
 
@@ -112,6 +132,91 @@ def validate_release(releasever: int, architecture: str) -> None:
     print(f"Docker CentOS {releasever} {architecture} repo publishes required packages.")
 
 
+def split_image(image: str) -> tuple[str, str, str]:
+    repository, tag = (
+        image.rsplit(":", 1)
+        if ":" in image.rsplit("/", 1)[-1]
+        else (image, "latest")
+    )
+
+    if "/" not in repository:
+        return "registry-1.docker.io", f"library/{repository}", tag
+
+    registry_candidate, path = repository.split("/", 1)
+    if "." in registry_candidate or ":" in registry_candidate or registry_candidate == "localhost":
+        return registry_candidate, path, tag
+
+    return "registry-1.docker.io", repository, tag
+
+
+def parse_bearer_challenge(header: str) -> dict[str, str]:
+    if not header.startswith("Bearer "):
+        raise RuntimeError(f"Unsupported registry authentication challenge: {header}")
+
+    return {
+        match.group(1): match.group(2)
+        for match in re.finditer(r'([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"', header)
+    }
+
+
+def registry_bearer_token(challenge: str) -> str:
+    params = parse_bearer_challenge(challenge)
+    realm = params.get("realm")
+    if not realm:
+        raise RuntimeError(f"Registry authentication challenge does not include a realm: {challenge}")
+
+    query = urllib.parse.urlencode(
+        {
+            key: value
+            for key, value in params.items()
+            if key in {"service", "scope"}
+        }
+    )
+    token_url = f"{realm}?{query}" if query else realm
+    payload = json.loads(read_url(token_url).decode("utf-8"))
+    token = payload.get("token") or payload.get("access_token")
+    if not token:
+        raise RuntimeError(f"Registry token response from {realm} did not include a token.")
+
+    return token
+
+
+def manifest_json(registry: str, path: str, tag: str) -> dict:
+    url = f"https://{registry}/v2/{path}/manifests/{tag}"
+    headers = {"Accept": MANIFEST_ACCEPT}
+    try:
+        return json.loads(read_url(url, headers=headers).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401:
+            raise
+        challenge = exc.headers.get("WWW-Authenticate", "")
+        token = registry_bearer_token(challenge)
+        headers["Authorization"] = f"Bearer {token}"
+        return json.loads(read_url(url, headers=headers).decode("utf-8"))
+
+
+def manifest_platforms(image: str) -> set[tuple[str, str]]:
+    registry, path, tag = split_image(image)
+    manifest = manifest_json(registry, path, tag)
+    return {
+        (
+            entry.get("platform", {}).get("os", ""),
+            entry.get("platform", {}).get("architecture", ""),
+        )
+        for entry in manifest.get("manifests", [])
+    }
+
+
+def validate_smoke_image(image: str) -> None:
+    platforms = manifest_platforms(image)
+    missing = sorted(REQUIRED_CONTAINER_PLATFORMS - platforms)
+    if missing:
+        rendered = ", ".join(f"{os_name}/{arch}" for os_name, arch in missing)
+        raise RuntimeError(f"{image} is missing required platforms: {rendered}")
+
+    print(f"{image} publishes linux/amd64 and linux/arm64 manifests.")
+
+
 def validate_gpg_key() -> None:
     content = read_url(GPG_KEY_URL).decode("ascii", errors="replace")
     if "BEGIN PGP PUBLIC KEY BLOCK" not in content:
@@ -127,11 +232,13 @@ def main() -> int:
             for architecture in RPM_ARCHITECTURES:
                 validate_rocky_prerequisites(releasever, architecture)
                 validate_release(releasever, architecture)
+        for image in ROCKY_SMOKE_IMAGES:
+            validate_smoke_image(image)
     except Exception as exc:  # pragma: no cover - command-line guard
-        print(f"Rocky RPM metadata validation failed: {exc}", file=sys.stderr)
+        print(f"Rocky metadata validation failed: {exc}", file=sys.stderr)
         return 1
 
-    print("Rocky RPM package publication validation passed.")
+    print("Rocky RPM package and smoke image publication validation passed.")
     return 0
 
 

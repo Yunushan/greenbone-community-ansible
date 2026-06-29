@@ -140,6 +140,8 @@ Worker nodes deploy scanner components. Registering remote scanners into `gvmd` 
 Rocky Linux 9 and 10 are supported as Docker-only standalone master targets on
 x86_64 and aarch64. This path uses Docker's CentOS RPM repository, so leave
 `greenbone_docker_use_official_repo: true` when the role installs Docker.
+For Rocky Linux 10, x86_64 means Rocky's x86-64-v3 baseline; older x86-64-v2
+hardware is outside this support target.
 Use the dedicated inventory as a starting point:
 
 ```bash

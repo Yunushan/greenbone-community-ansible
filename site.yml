@@ -1,3 +1,3 @@
 ---
 - name: Install Greenbone Community Edition
-  import_playbook: playbooks/install.yml
+  ansible.builtin.import_playbook: playbooks/install.yml

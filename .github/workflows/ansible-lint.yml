@@ -62,5 +62,19 @@ jobs:
       - name: Run Rocky acceptance evidence validation self-test
         run: python3 scripts/dev/Test-RockyAcceptanceEvidence.py --self-test
 
+      - name: Run Rocky acceptance inventory renderer self-test
+        run: python3 scripts/dev/Render-RockyAcceptanceInventory.py --self-test
+
+      - name: Validate Rocky local acceptance runner shell
+        run: |
+          bash -n scripts/dev/Run-RockyStandaloneAcceptance.sh
+          bash scripts/dev/Run-RockyStandaloneAcceptance.sh --self-test
+
+      - name: Run Rocky acceptance workflow shell validation
+        run: python3 scripts/dev/Test-RockyAcceptanceWorkflowShell.py
+
+      - name: Run Rocky acceptance readiness checker self-test
+        run: python3 scripts/dev/Test-RockyAcceptanceReadiness.py --self-test
+
       - name: Run Rocky Docker repository smoke validation
         run: bash scripts/dev/Test-RockyDockerRepo.sh

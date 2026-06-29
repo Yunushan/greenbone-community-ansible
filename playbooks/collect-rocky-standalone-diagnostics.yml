@@ -191,17 +191,17 @@
               'docker_rpm_repo_file': greenbone_diag_docker_repo_file,
               'docker_rpm_repo_file_exists': greenbone_diag_docker_repo_file_stat.stat.exists,
               'docker_rpm_repo_gpgcheck_enabled': (
-                greenbone_diag_docker_repo_gpgcheck_marker in
+                (greenbone_diag_docker_repo_gpgcheck_marker | default('')) in
                 (greenbone_diag_docker_repo_file_content.content | default('') | b64decode)
               ),
               'docker_rpm_repo_gpgkey_url_present': (
-                greenbone_diag_docker_repo_gpgkey_marker in
+                (greenbone_diag_docker_repo_gpgkey_marker | default('')) in
                 (greenbone_diag_docker_repo_file_content.content | default('') | b64decode)
               ),
               'docker_rpm_gpg_key_fingerprint': greenbone_diag_docker_rpm_gpg_fingerprint,
               'docker_rpm_gpg_key_id': greenbone_diag_docker_rpm_gpg_key_id,
               'docker_rpm_gpg_key_imported': (
-                greenbone_diag_docker_rpm_gpg_key_id in
+                (greenbone_diag_docker_rpm_gpg_key_id | default('')) in
                 (greenbone_diag_rpm_gpg_keys.stdout | default('') | lower)
               ),
               'rpm_gpg_keys_stdout': greenbone_diag_rpm_gpg_keys.stdout_lines,

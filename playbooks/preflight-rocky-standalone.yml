@@ -1,16 +1,39 @@
 ---
-- import_playbook: bootstrap-rocky-standalone.yml
+- name: Bootstrap Rocky Linux standalone Python support
+  ansible.builtin.import_playbook: bootstrap-rocky-standalone.yml
 
 - name: Preflight Rocky Linux standalone Docker targets
   hosts: greenbone_masters
   become: true
   gather_facts: true
   vars:
+    greenbone_preflight_supported_major_versions: "{{ greenbone_rocky_docker_supported_major_versions | default([9, 10]) }}"
     greenbone_preflight_supported_architectures: "{{ greenbone_rocky_docker_supported_architectures | default(['x86_64', 'aarch64']) }}"
     greenbone_preflight_min_cpu_cores: "{{ greenbone_rocky_preflight_min_cpu_cores | default(4) }}"
     greenbone_preflight_min_memory_mb: "{{ greenbone_rocky_preflight_min_memory_mb | default(8192) }}"
     greenbone_preflight_min_disk_mb: "{{ greenbone_rocky_preflight_min_disk_mb | default(61440) }}"
     greenbone_preflight_rocky10_min_ansible_core_version: "{{ greenbone_rocky10_min_ansible_core_version | default('2.19.0') }}"
+    greenbone_preflight_rocky10_x86_64_v3_required_cpu_flag_groups: >-
+      {{
+        greenbone_rocky10_x86_64_v3_required_cpu_flag_groups | default([
+          ['cx16'],
+          ['lahf_lm'],
+          ['popcnt'],
+          ['pni', 'sse3'],
+          ['ssse3'],
+          ['sse4_1'],
+          ['sse4_2'],
+          ['avx'],
+          ['avx2'],
+          ['bmi1'],
+          ['bmi2'],
+          ['f16c'],
+          ['fma'],
+          ['abm', 'lzcnt'],
+          ['movbe'],
+          ['xsave']
+        ])
+      }}
     greenbone_preflight_default_disk_check_path: >-
       {{ (greenbone_work_dir | default('/opt/greenbone-community')) | dirname }}
     greenbone_preflight_disk_check_path: >-
@@ -48,7 +71,7 @@
       ansible.builtin.assert:
         that:
           - ansible_distribution | lower | regex_replace('[^a-z0-9]', '') in ['rocky', 'rockylinux']
-          - ansible_distribution_major_version | int in [9, 10]
+          - ansible_distribution_major_version | int in greenbone_preflight_supported_major_versions
           - ansible_architecture in greenbone_preflight_supported_architectures
           - greenbone_install_mode == 'docker'
           - greenbone_docker_use_official_repo | default(true) | bool
@@ -56,8 +79,10 @@
             greenbone_expected_rocky_major_version is not defined or
             ansible_distribution_major_version | int == greenbone_expected_rocky_major_version | int
         fail_msg: >-
-          Rocky standalone preflight requires Rocky Linux 9 or 10 on x86_64 or
-          aarch64, greenbone_install_mode=docker,
+          Rocky standalone preflight requires Rocky Linux
+          {{ greenbone_preflight_supported_major_versions | join(' or ') }} on
+          {{ greenbone_preflight_supported_architectures | join(' or ') }},
+          greenbone_install_mode=docker,
           greenbone_docker_use_official_repo=true, and the expected Rocky major
           version to match the inventory host.
 
@@ -81,6 +106,36 @@
           dnf5 so Ansible's Red Hat package tasks select a supported backend.
           Gathered
           ansible_pkg_mgr={{ ansible_pkg_mgr | default('unknown') }}.
+
+    - name: Record Rocky Linux CPU flags for x86-64-v3 validation
+      ansible.builtin.set_fact:
+        greenbone_preflight_cpu_flags: "{{ ansible_processor_flags | default([]) | map('lower') | list }}"
+        greenbone_preflight_rocky10_x86_64_v3_missing_cpu_flags: []
+
+    - name: Record missing Rocky Linux 10 x86-64-v3 CPU feature groups
+      ansible.builtin.set_fact:
+        greenbone_preflight_rocky10_x86_64_v3_missing_cpu_flags: >-
+          {{
+            greenbone_preflight_rocky10_x86_64_v3_missing_cpu_flags +
+            [item | join('/')]
+          }}
+      loop: "{{ greenbone_preflight_rocky10_x86_64_v3_required_cpu_flag_groups }}"
+      when:
+        - ansible_distribution_major_version | int == 10
+        - ansible_architecture == 'x86_64'
+        - (item | map('lower') | list | intersect(greenbone_preflight_cpu_flags)) | length == 0
+
+    - name: Assert Rocky Linux 10 x86_64 target meets x86-64-v3 CPU baseline
+      ansible.builtin.assert:
+        that:
+          - greenbone_preflight_rocky10_x86_64_v3_missing_cpu_flags | length == 0
+        fail_msg: >-
+          Rocky Linux 10 x86_64 requires the x86-64-v3 CPU baseline. Missing
+          CPU feature groups:
+          {{ greenbone_preflight_rocky10_x86_64_v3_missing_cpu_flags | join(', ') }}.
+      when:
+        - ansible_distribution_major_version | int == 10
+        - ansible_architecture == 'x86_64'
 
     - name: Record target Docker RPM metadata URL
       ansible.builtin.set_fact:

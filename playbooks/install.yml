@@ -1,5 +1,6 @@
 ---
-- import_playbook: bootstrap-rocky-standalone.yml
+- name: Bootstrap Rocky Linux standalone Python support
+  ansible.builtin.import_playbook: bootstrap-rocky-standalone.yml
 
 - name: Prepare Greenbone hosts
   hosts: greenbone_masters:greenbone_workers

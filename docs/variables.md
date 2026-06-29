@@ -6,8 +6,9 @@
 |---|---:|---|
 | `greenbone_install_mode` | `auto` | `auto`, `docker`, or `native`; Rocky Linux 9/10 standalone installs must set `docker` explicitly. |
 | `greenbone_rocky_docker_supported_major_versions` | `[9, 10]` | Rocky Linux major versions validated for Docker-only standalone installs. |
-| `greenbone_rocky_docker_supported_architectures` | `[x86_64, aarch64]` | Rocky Linux architectures validated for Docker-only standalone installs. |
+| `greenbone_rocky_docker_supported_architectures` | `[x86_64, aarch64]` | Rocky Linux architectures validated for Docker-only standalone installs. Rocky Linux 10 x86_64 follows Rocky's x86-64-v3 baseline. |
 | `greenbone_rocky10_min_ansible_core_version` | `2.19.0` | Minimum controller `ansible-core` version for Rocky Linux 10 package tasks. |
+| `greenbone_rocky10_x86_64_v3_required_cpu_flag_groups` | x86-64-v3 feature groups | CPU feature groups required when validating Rocky Linux 10 on x86_64. Some groups include Linux flag aliases such as `pni`/`sse3` and `abm`/`lzcnt`. |
 | `greenbone_rocky_preflight_min_cpu_cores` | `4` | Minimum CPU cores for the Rocky standalone preflight. |
 | `greenbone_rocky_preflight_min_memory_mb` | `8192` | Minimum RAM in MB for the Rocky standalone preflight. |
 | `greenbone_rocky_preflight_min_disk_mb` | `61440` | Minimum free disk in MB for the Rocky standalone preflight. |
@@ -66,7 +67,8 @@ For fully Docker-based installation on all nodes:
 greenbone_install_mode: docker
 ```
 
-For Rocky Linux 9/10 standalone installs on x86_64 or aarch64, keep Docker mode:
+For Rocky Linux 9/10 standalone installs on x86_64 or aarch64, keep Docker mode.
+Rocky Linux 10 x86_64 targets must meet Rocky's x86-64-v3 CPU baseline:
 
 ```yaml
 greenbone_install_mode: docker

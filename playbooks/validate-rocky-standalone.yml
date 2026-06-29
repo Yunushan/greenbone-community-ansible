@@ -11,6 +11,27 @@
     greenbone_validate_min_memory_mb: "{{ greenbone_rocky_preflight_min_memory_mb | default(8192) }}"
     greenbone_validate_min_disk_mb: "{{ greenbone_rocky_preflight_min_disk_mb | default(61440) }}"
     greenbone_validate_rocky10_min_ansible_core_version: "{{ greenbone_rocky10_min_ansible_core_version | default('2.19.0') }}"
+    greenbone_validate_rocky10_x86_64_v3_required_cpu_flag_groups: >-
+      {{
+        greenbone_rocky10_x86_64_v3_required_cpu_flag_groups | default([
+          ['cx16'],
+          ['lahf_lm'],
+          ['popcnt'],
+          ['pni', 'sse3'],
+          ['ssse3'],
+          ['sse4_1'],
+          ['sse4_2'],
+          ['avx'],
+          ['avx2'],
+          ['bmi1'],
+          ['bmi2'],
+          ['f16c'],
+          ['fma'],
+          ['abm', 'lzcnt'],
+          ['movbe'],
+          ['xsave']
+        ])
+      }}
     greenbone_validate_default_disk_check_path: "{{ greenbone_validate_work_dir | dirname }}"
     greenbone_validate_disk_check_path: >-
       {{
@@ -40,6 +61,7 @@
         greenbone_docker_rpm_packages
         | default(greenbone_validate_default_docker_rpm_packages)
       }}
+    greenbone_validate_supported_major_versions: "{{ greenbone_rocky_docker_supported_major_versions | default([9, 10]) }}"
     greenbone_validate_supported_architectures: "{{ greenbone_rocky_docker_supported_architectures | default(['x86_64', 'aarch64']) }}"
     greenbone_validate_service_retries: "{{ greenbone_rocky_validate_service_retries | default(60) }}"
     greenbone_validate_service_delay: "{{ greenbone_rocky_validate_service_delay | default(15) }}"
@@ -58,7 +80,7 @@
       ansible.builtin.assert:
         that:
           - ansible_distribution | lower | regex_replace('[^a-z0-9]', '') in ['rocky', 'rockylinux']
-          - ansible_distribution_major_version | int in [9, 10]
+          - ansible_distribution_major_version | int in greenbone_validate_supported_major_versions
           - ansible_architecture in greenbone_validate_supported_architectures
           - greenbone_install_mode == 'docker'
           - greenbone_docker_use_official_repo | default(true) | bool
@@ -66,9 +88,10 @@
             greenbone_expected_rocky_major_version is not defined or
             ansible_distribution_major_version | int == greenbone_expected_rocky_major_version | int
         fail_msg: >-
-          This validation playbook supports Rocky Linux 9 and 10 on x86_64 or
-          aarch64 only, using greenbone_install_mode=docker and Docker's
-          official CentOS RPM repository.
+          This validation playbook supports Rocky Linux
+          {{ greenbone_validate_supported_major_versions | join(' and ') }} on
+          {{ greenbone_validate_supported_architectures | join(' and ') }} only,
+          using greenbone_install_mode=docker and the official CentOS RPM repository.
 
     - name: Assert controller ansible-core supports Rocky Linux 10
       ansible.builtin.assert:
@@ -90,6 +113,36 @@
           the evidence proves Ansible selected a supported Red Hat package
           backend. Gathered
           ansible_pkg_mgr={{ ansible_pkg_mgr | default('unknown') }}.
+
+    - name: Record Rocky Linux CPU flags for x86-64-v3 validation
+      ansible.builtin.set_fact:
+        greenbone_validate_cpu_flags: "{{ ansible_processor_flags | default([]) | map('lower') | list }}"
+        greenbone_validate_rocky10_x86_64_v3_missing_cpu_flags: []
+
+    - name: Record missing Rocky Linux 10 x86-64-v3 CPU feature groups
+      ansible.builtin.set_fact:
+        greenbone_validate_rocky10_x86_64_v3_missing_cpu_flags: >-
+          {{
+            greenbone_validate_rocky10_x86_64_v3_missing_cpu_flags +
+            [item | join('/')]
+          }}
+      loop: "{{ greenbone_validate_rocky10_x86_64_v3_required_cpu_flag_groups }}"
+      when:
+        - ansible_distribution_major_version | int == 10
+        - ansible_architecture == 'x86_64'
+        - (item | map('lower') | list | intersect(greenbone_validate_cpu_flags)) | length == 0
+
+    - name: Assert Rocky Linux 10 x86_64 target meets x86-64-v3 CPU baseline
+      ansible.builtin.assert:
+        that:
+          - greenbone_validate_rocky10_x86_64_v3_missing_cpu_flags | length == 0
+        fail_msg: >-
+          Rocky Linux 10 x86_64 requires the x86-64-v3 CPU baseline. Missing
+          CPU feature groups:
+          {{ greenbone_validate_rocky10_x86_64_v3_missing_cpu_flags | join(', ') }}.
+      when:
+        - ansible_distribution_major_version | int == 10
+        - ansible_architecture == 'x86_64'
 
     - name: Check available disk space for Rocky validation evidence
       ansible.builtin.command:
@@ -433,6 +486,8 @@
             {
               'host': inventory_hostname,
               'validated_at': ansible_date_time.iso8601,
+              'acceptance_run_id': greenbone_acceptance_run_id | default(''),
+              'acceptance_run_attempt': greenbone_acceptance_run_attempt | default(''),
               'distribution': ansible_distribution,
               'distribution_version': ansible_distribution_version,
               'distribution_major_version': ansible_distribution_major_version,
@@ -447,6 +502,13 @@
               ),
               'ansible_core_version': ansible_version.full,
               'minimum_ansible_core_version_for_rocky10': greenbone_validate_rocky10_min_ansible_core_version,
+              'cpu_flags': greenbone_validate_cpu_flags,
+              'rocky10_x86_64_v3_cpu_flags_checked': (
+                ansible_distribution_major_version | int == 10 and
+                ansible_architecture == 'x86_64'
+              ),
+              'rocky10_x86_64_v3_required_cpu_flag_groups': greenbone_validate_rocky10_x86_64_v3_required_cpu_flag_groups,
+              'rocky10_x86_64_v3_missing_cpu_flags': greenbone_validate_rocky10_x86_64_v3_missing_cpu_flags,
               'expected_distribution_major_version': greenbone_expected_rocky_major_version | default('unset'),
               'install_mode': greenbone_install_mode,
               'official_docker_repo_enabled': greenbone_docker_use_official_repo | default(true) | bool,
@@ -460,21 +522,21 @@
               'docker_rpm_repo_file': greenbone_validate_docker_rpm_repo_file,
               'docker_rpm_repo_file_exists': greenbone_validate_docker_rpm_repo_file_stat.stat.exists | default(false),
               'docker_rpm_repo_uses_docker_centos_repo': (
-                greenbone_validate_docker_rpm_repo_marker in
+                (greenbone_validate_docker_rpm_repo_marker | default('')) in
                 (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
               ),
               'docker_rpm_repo_gpgcheck_enabled': (
-                greenbone_validate_docker_rpm_repo_gpgcheck_marker in
+                (greenbone_validate_docker_rpm_repo_gpgcheck_marker | default('')) in
                 (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
               ),
               'docker_rpm_repo_gpgkey_url_present': (
-                greenbone_validate_docker_rpm_repo_gpgkey_marker in
+                (greenbone_validate_docker_rpm_repo_gpgkey_marker | default('')) in
                 (greenbone_validate_docker_rpm_repo_file_content.content | default('') | b64decode)
               ),
               'docker_rpm_gpg_key_fingerprint': greenbone_validate_docker_rpm_gpg_fingerprint,
               'docker_rpm_gpg_key_id': greenbone_validate_docker_rpm_gpg_key_id,
               'docker_rpm_gpg_key_imported': (
-                greenbone_validate_docker_rpm_gpg_key_id in
+                (greenbone_validate_docker_rpm_gpg_key_id | default('')) in
                 (greenbone_validate_rpm_gpg_keys.stdout | default('') | lower)
               ),
               'docker_rpm_packages': (
@@ -505,11 +567,11 @@
               'web_https_port': greenbone_validate_web_https_port | int,
               'web_gsad_port': greenbone_validate_web_gsad_port | int,
               'web_https_mapping_present': (
-                greenbone_validate_compose_web_https_mapping in
+                (greenbone_validate_compose_web_https_mapping | default('')) in
                 (greenbone_validate_compose_file_content.content | b64decode)
               ),
               'web_gsad_mapping_present': (
-                greenbone_validate_compose_web_gsad_mapping in
+                (greenbone_validate_compose_web_gsad_mapping | default('')) in
                 (greenbone_validate_compose_file_content.content | b64decode)
               ),
               'web_probe_status': greenbone_validate_web_probe.status | default('unknown'),

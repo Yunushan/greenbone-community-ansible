@@ -7,7 +7,6 @@ name: rocky-standalone-acceptance
       runner_label:
         description: GitHub Actions runner label that can SSH to both Rocky hosts.
         required: true
-        default: ubuntu-latest
 
 permissions:
   contents: read
@@ -103,61 +102,7 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Render acceptance inventory
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-
-          def scalar(value):
-              return json.dumps(value)
-
-
-          inventory_vars = [
-              ("greenbone_install_mode", scalar("docker")),
-              ("greenbone_docker_use_official_repo", "true"),
-              ("greenbone_web_bind_address", scalar("127.0.0.1")),
-              ("ansible_user", scalar(os.environ["ROCKY_SSH_USER"])),
-              ("ansible_port", str(int(os.environ["ROCKY_SSH_PORT"]))),
-              ("ansible_ssh_private_key_file", scalar(f"{os.environ['HOME']}/.ssh/id_ed25519")),
-              (
-                  "ansible_ssh_common_args",
-                  scalar(
-                      "-o StrictHostKeyChecking=yes "
-                      f"-o UserKnownHostsFile={os.environ['HOME']}/.ssh/known_hosts"
-                  ),
-              ),
-          ]
-          if os.environ.get("ROCKY_BECOME_PASSWORD"):
-              inventory_vars.append(
-                  ("ansible_become_password", scalar(os.environ["ROCKY_BECOME_PASSWORD"]))
-              )
-
-          lines = ["---", "all:", "  vars:"]
-          lines.extend(f"    {name}: {value}" for name, value in inventory_vars)
-          lines.extend(
-              [
-                  "  children:",
-                  "    greenbone_masters:",
-                  "      hosts:",
-                  "        rocky9-standalone:",
-                  f"          ansible_host: {scalar(os.environ['ROCKY9_HOST'])}",
-                  "          greenbone_expected_rocky_major_version: 9",
-                  "        rocky10-standalone:",
-                  f"          ansible_host: {scalar(os.environ['ROCKY10_HOST'])}",
-                  "          greenbone_expected_rocky_major_version: 10",
-                  "    greenbone_workers:",
-                  "      hosts: {}",
-              ]
-          )
-
-          Path(os.environ["ACCEPTANCE_INVENTORY"]).write_text(
-              "\n".join(lines) + "\n",
-              encoding="utf-8",
-          )
-          PY
+        run: python3 scripts/dev/Render-RockyAcceptanceInventory.py --output "${ACCEPTANCE_INVENTORY}"
 
       - name: Show acceptance inventory hosts
         run: ansible-inventory -i "${ACCEPTANCE_INVENTORY}" --graph
@@ -170,6 +115,36 @@ jobs:
           -a 'id -u && test -r /etc/os-release'
           --become
 
+      - name: Verify Rocky acceptance hosts are clean
+        shell: bash
+        run: |
+          ansible greenbone_masters \
+            -i "${ACCEPTANCE_INVENTORY}" \
+            -m ansible.builtin.raw \
+            -a 'set -eu
+          if [ -e /opt/greenbone-community ]; then
+            echo "Rocky acceptance hosts must be clean; /opt/greenbone-community already exists."
+            exit 1
+          fi
+          if command -v docker >/dev/null 2>&1; then
+            docker_name_format="$(printf "{%s}" "{.Names}")"
+            compose_project_label="com.docker.compose.project=greenbone-community"
+            greenbone_service_pattern="(gsa|gsad|gvmd|nginx|openvas|openvasd|ospd-openvas|pg-gvm|redis-server)"
+            greenbone_container_pattern="^((greenbone-community[-_])?${greenbone_service_pattern}([-_][0-9]+)?)$"
+            existing="$(docker ps -a --filter "label=${compose_project_label}" --format "${docker_name_format}")"
+            if [ -z "${existing}" ]; then
+              existing="$(
+                docker ps -a --format "${docker_name_format}" |
+                grep -E "${greenbone_container_pattern}" || true
+              )"
+            fi
+            if [ -n "${existing}" ]; then
+              echo "Rocky acceptance hosts must be clean; Greenbone containers already exist: ${existing}"
+              exit 1
+            fi
+          fi' \
+            --become
+
       - name: Run Rocky standalone preflight
         run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" playbooks/preflight-rocky-standalone.yml
 
@@ -180,7 +155,11 @@ jobs:
         run: ansible-playbook -i "${ACCEPTANCE_INVENTORY}" playbooks/validate-rocky-standalone.yml
 
       - name: Validate Rocky acceptance evidence
-        run: python3 scripts/dev/Test-RockyAcceptanceEvidence.py
+        run: >-
+          python3 scripts/dev/Test-RockyAcceptanceEvidence.py
+          --max-age-hours 24
+          --run-id "${GITHUB_RUN_ID}"
+          --run-attempt "${GITHUB_RUN_ATTEMPT}"
 
       - name: Collect Rocky diagnostics on failure
         if: failure()
