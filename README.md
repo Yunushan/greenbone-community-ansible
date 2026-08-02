@@ -33,7 +33,7 @@ The default topology is one Greenbone master. Worker nodes are opt-in by adding 
 - Optional scanner worker role for advanced multi-node deployments.
 - Secure-by-default local web bind for container mode: `127.0.0.1`.
 - Generated admin password stored locally under `.secrets/` on the Ansible controller.
-- MIT license.
+- 0BSD license.
 - GitHub Actions workflow for Ansible linting.
 
 ## Quick start
@@ -200,4 +200,4 @@ greenbone_admin_user: admin
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+0BSD. See [LICENSE](LICENSE).
